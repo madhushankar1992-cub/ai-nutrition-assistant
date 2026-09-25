@@ -111,3 +111,26 @@ export async function POST(req: NextRequest) {
   // 9. Respond
   return NextResponse.json({ conversationId, ...result });
 }
+
+/**
+ * Deletes a single conversation and its messages/claims.
+ * DELETE /api/chat?conversationId=<id>
+ */
+export async function DELETE(req: NextRequest) {
+  const conversationId = req.nextUrl.searchParams.get("conversationId");
+  if (!conversationId) {
+    return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
+  }
+
+  const messages = await prisma.message.findMany({
+    where: { conversationId },
+    select: { id: true },
+  });
+  const messageIds = messages.map((m) => m.id);
+
+  await prisma.claim.deleteMany({ where: { messageId: { in: messageIds } } });
+  await prisma.message.deleteMany({ where: { conversationId } });
+  await prisma.conversation.deleteMany({ where: { id: conversationId } });
+
+  return NextResponse.json({ deleted: true, conversationId });
+}

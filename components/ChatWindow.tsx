@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { MessageBubble, type ChatMessage } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { SourcesPanel } from "./SourcesPanel";
-import { LeafIcon, SettingsIcon, HeroMark } from "./icons";
+import { LeafIcon, SettingsIcon, HeroMark, TrashIcon } from "./icons";
 
 const SUGGESTED_QUESTIONS = [
   "How much vitamin C do I need per day?",
@@ -15,7 +15,15 @@ const SUGGESTED_QUESTIONS = [
   "Why does sourdough rise without yeast?",
 ];
 
-function Header() {
+function Header({
+  hasMessages,
+  isClearing,
+  onClear,
+}: {
+  hasMessages: boolean;
+  isClearing: boolean;
+  onClear: () => void;
+}) {
   return (
     <div className="flex h-[78px] shrink-0 items-center justify-between border-b border-white/10 px-10">
       <div className="flex items-center gap-3.5">
@@ -35,6 +43,18 @@ function Header() {
         <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-wider text-accent">
           No citations yet
         </span>
+        {hasMessages && (
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={isClearing}
+            aria-label="Clear chat history"
+            title="Clear chat history"
+            className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/10 bg-surface transition hover:border-red-400/40 hover:text-red-400 disabled:opacity-50"
+          >
+            <TrashIcon className="h-[16px] w-[16px] text-ink-muted" />
+          </button>
+        )}
         <button
           type="button"
           aria-label="Settings"
@@ -94,6 +114,7 @@ export function ChatWindow() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [draft, setDraft] = useState("");
+  const [isClearing, setIsClearing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -139,13 +160,33 @@ export function ChatWindow() {
     }
   }
 
+  async function handleClear() {
+    setIsClearing(true);
+    try {
+      if (conversationId) {
+        await fetch(`/api/chat?conversationId=${encodeURIComponent(conversationId)}`, {
+          method: "DELETE",
+        });
+      }
+    } catch {
+      // Best-effort: even if the server delete fails, still reset the client
+      // view so the user isn't stuck looking at a conversation they asked to clear.
+    } finally {
+      setMessages([]);
+      setConversationId(null);
+      setSelectedId(null);
+      setDraft("");
+      setIsClearing(false);
+    }
+  }
+
   const selectedMessage = messages.find((m) => m.id === selectedId) ?? null;
   const isEmpty = messages.length === 0;
 
   return (
     <div className="flex h-screen bg-bg bg-dot-grid">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header />
+        <Header hasMessages={!isEmpty} isClearing={isClearing} onClear={handleClear} />
 
         <div className={`thin-scrollbar flex flex-1 flex-col overflow-y-auto ${isEmpty ? "bg-dot-grid-hero" : ""}`}>
           {isEmpty ? (
