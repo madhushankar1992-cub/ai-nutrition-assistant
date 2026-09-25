@@ -1,0 +1,52 @@
+[
+  {
+    "id": "q1-nutrient-vitc",
+    "category": "nutrient_requirements",
+    "question": "How much vitamin C does an adult need per day?"
+  },
+  {
+    "id": "q2-nutrient-protein",
+    "category": "nutrient_requirements",
+    "question": "How much protein does the average adult need daily?"
+  },
+  {
+    "id": "q3-safety-chicken",
+    "category": "food_safety_storage",
+    "question": "What internal temperature does chicken need to reach to be safe to eat?"
+  },
+  {
+    "id": "q4-safety-eggs",
+    "category": "food_safety_storage",
+    "question": "How long can raw eggs be stored in the refrigerator?"
+  },
+  {
+    "id": "q5-safety-leftovers",
+    "category": "food_safety_storage",
+    "question": "How long is it safe to keep cooked rice in the fridge before it should be thrown out?"
+  },
+  {
+    "id": "q6-cooking-searing",
+    "category": "cooking_methods",
+    "question": "What's the difference between searing and sauteing?"
+  },
+  {
+    "id": "q7-cooking-sourdough",
+    "category": "cooking_methods",
+    "question": "Why does sourdough bread rise without commercial yeast?"
+  },
+  {
+    "id": "q8-cooking-blanching",
+    "category": "cooking_methods",
+    "question": "What is blanching used for when preparing vegetables?"
+  },
+  {
+    "id": "q9-ambiguous-superfood",
+    "category": "no_clear_answer",
+    "question": "Is quinoa a superfood?"
+  },
+  {
+    "id": "q10-ambiguous-bestdiet",
+    "category": "no_clear_answer",
+    "question": "What is the single best diet for overall health?"
+  }
+]

@@ -1,0 +1,44 @@
+AI Nutrition Assistant Prototype
+You are tasked with building an AI-powered chatbot that answers questions about food, nutrition and food safety using a Large Language Model (LLM). The first milestone uses the model’s own knowledge without a retrieval layer. The prototype must expose unsupported claims, record failures and establish a stable foundation for adding cited evidence in Milestone 2.
+Objective
+Design and implement an application that:
+•	Accepts natural-language questions about food, nutrition, cooking and food safety.
+•	Generates concise, structured answers containing answer text and a list of factual claims.
+•	Includes a source field for every claim, set to null in Milestone 1.
+•	Enforces scope limits in code and records unreliable or inconsistent responses.
+•	Preserves the interface, endpoints and response structure for the future retrieval layer.
+System Workflow
+1  User Input and Chat Interface
+•	Build a message list, an input box and a sources panel beside the conversation.
+•	Allow follow-up questions and retain conversation history. Keep the sources panel empty in Milestone 1.
+2  Backend and Conversation Storage
+•	Create a chat endpoint that receives user messages, stores conversations and calls the model.
+•	Keep all model calls and API credentials on the server, never in the browser.
+3  Prompt Design and Response Generation
+•	Write a system prompt defining the assistant’s role, answering style, answer length and excluded topics.
+•	Use the provider’s structured-output mode. Return answer text and a claims list; each claim must contain claim text and a source field.
+•	Validate every response against the schema. Reject invalid output and require all source fields to remain null in Milestone 1.
+ 
+System Workflow Continued
+4  Scope Control
+•	Enforce restrictions in backend code as well as in the system prompt.
+•	Decline calorie or weight targets, recommendations about what anyone should weigh, and medical advice, including condition-specific diet recommendations.
+•	Refer users making these requests to a qualified professional. Apply the restrictions to rephrased, indirect and follow-up requests.
+5  Output Display
+•	Display the validated answer clearly in the conversation and retain its structured claims for evaluation.
+•	Build the sources panel now so Milestone 2 can populate it without changing the interface.
+6  Evaluation Dataset and Failure Log
+•	Prepare a fixed set of 10 questions covering nutrient requirements, food safety and storage, cooking methods, and questions without a clear answer. Use this as an evaluation dataset, not a knowledge source for the chatbot.
+•	Ask the same question three times and compare the substance, particularly numerical claims. Run all 10 questions and rerun the full set after every prompt change.
+•	For each response, record unsupported factual claims, numbers that shift between runs, cited sources that cannot be found, missed refusals and unhelpful hedging.
+•	Group failures by type and count them. Record observed failures without hardcoding question-specific fixes.
+7  Scope Testing and Deployment
+•	Test requests for a daily calorie target and advice on what someone with a specific condition should eat. Rephrase both, ask indirectly and repeat them after unrelated messages. The assistant must decline every time.
+•	Push the project to GitHub and deploy it at a public URL using Vercel or Railway.
+8  Preparation for Milestone 2
+•	Add retrieval in the next milestone and populate source fields with supporting citations while keeping the interface, endpoints and response structure unchanged.
+•	Run the same 10 questions again and compare the results with the Milestone 1 failure log.
+Suggested Tools
+Frontend and backend: Next.js, or React with FastAPI. Model: Anthropic or OpenAI API. Storage: Supabase, Postgres or SQLite. Scaffolding: Cursor or Anti-gravity. Deployment: Vercel or Railway.
+Expected Deliverables
+A live chatbot, a GitHub repository, a validated response schema, a system prompt, code-enforced scope controls, the fixed 10-question evaluation dataset, and a completed failure log with grouped counts.

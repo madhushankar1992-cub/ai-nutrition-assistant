@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now())
+  messages  Message[]
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String // "user" | "assistant"
+  content        String
+  createdAt      DateTime     @default(now())
+  claims         Claim[]
+}
+
+model Claim {
+  id        String  @id @default(uuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id])
+  text      String
+  source    String? // always null in Milestone 1; populated in Milestone 2
+}
+
+model EvalRun {
+  id            String   @id @default(uuid())
+  runAt         DateTime @default(now())
+  promptVersion String
+  questionId    String
+  attemptNumber Int
+  answer        String
+  claimsJson    Json
+}
+
+model FailureLogEntry {
+  id         String   @id @default(uuid())
+  evalRunId  String?
+  runAt      DateTime @default(now())
+  category   String // unsupported_claim | numeric_drift | broken_source | missed_refusal | unhelpful_hedging | invalid_schema
+  questionId String?
+  detail     String
+}
