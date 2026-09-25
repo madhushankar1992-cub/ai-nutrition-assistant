@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ChatRequestSchema, ChatResponse } from "@/lib/schema";
 import { checkRequest, checkResponse, REFUSAL_MESSAGE } from "@/lib/scopeGuard";
-import { generateStructuredAnswer, type ConversationTurn } from "@/lib/anthropic";
+import { generateStructuredAnswer, type ConversationTurn } from "@/lib/groq";
+
+// Groq calls can retry with backoff on rate limits/transient errors (lib/groq.ts),
+// which can exceed Vercel's default serverless timeout. Hobby plan max is 60s.
+export const maxDuration = 60;
 
 async function logFailure(category: string, detail: string) {
   await prisma.failureLogEntry.create({
@@ -59,7 +63,7 @@ export async function POST(req: NextRequest) {
     { role: "user", content: message },
   ];
 
-  // 4-5. Call Anthropic with structured output + schema validation (incl. one retry)
+  // 4-5. Call Groq with structured output + schema validation (incl. one retry)
   let result: ChatResponse;
   try {
     result = await generateStructuredAnswer(history);

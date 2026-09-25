@@ -20,18 +20,19 @@ export const REFUSAL_MESSAGE =
 const NUMERIC_TARGET_PATTERNS: RegExp[] = [
   /\bhow many calories (should|do) i\b/i,
   /\bhow many calories (should|does|do) (he|she|they|i)\b/i,
-  /\bcalorie (target|goal|limit|budget)\b/i,
+  /\bcalorie (target|goal|limit|budget|number|count)\b/i,
   /\bhow much (protein|fat|carbs?|sugar) should i (eat|consume|have)\b/i,
   /\bmacro (target|goal|split) for me\b/i,
   /\bhow many pounds\/kg should i (lose|gain)\b/i,
   /\bwhat should my (daily )?calorie intake be\b/i,
+  /\b(work out|calculate|figure out) (a |my )?calorie/i,
 ];
 
 const PERSONAL_WEIGHT_PATTERNS: RegExp[] = [
   /\bwhat should i weigh\b/i,
   /\bwhat('?s| is) my ideal weight\b/i,
   /\bam i overweight\b/i,
-  /\bshould i (lose|gain) weight\b/i,
+  /\bshould i\b[^.?!]{0,40}\b(lose|gain) weight\b/i,
   /\bwhat weight should (he|she|they|i)\b/i,
   /\bis \d+\s?(lbs?|kg|pounds|kilograms) (healthy|too (much|little|heavy|light))\b/i,
 ];
@@ -40,7 +41,9 @@ const MEDICAL_ADVICE_PATTERNS: RegExp[] = [
   /\b(i have|i('?ve)? been diagnosed with|my (doctor|dietitian) says i have)\s+(diabetes|kidney disease|celiac|crohn'?s|hypertension|high blood pressure|heart disease|gout|ibs)\b/i,
   /\bwhat should (i|someone with|a person with) .*(diabetes|kidney disease|celiac|crohn'?s|hypertension|high blood pressure|heart disease|gout|ibs) eat\b/i,
   /\bdiet (plan|recommendation) for (my|a) (condition|diagnosis|disease)\b/i,
+  /\bdiagnosed with (diabetes|kidney disease|celiac|crohn'?s|hypertension|high blood pressure|heart disease|gout|ibs)\b/i,
   /\bis this safe for someone with (diabetes|kidney disease|heart disease|hypertension)\b/i,
+  /\bblood sugar\b.{0,60}\bwhat\b.{0,30}\b(foods?|eat)\b/i,
 ];
 
 function matchAny(

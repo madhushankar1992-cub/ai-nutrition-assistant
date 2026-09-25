@@ -14,6 +14,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../lib/db";
 import { SYSTEM_PROMPT } from "../lib/systemPrompt";
+import { REFUSAL_MESSAGE } from "../lib/scopeGuard";
 import questions from "../data/eval-questions.json";
 
 const BASE_URL = process.env.EVAL_BASE_URL ?? "http://localhost:3000";
@@ -44,8 +45,28 @@ async function callChat(
   return res.json();
 }
 
-function extractNumbers(text: string): string[] {
-  return text.match(/\d+(\.\d+)?/g) ?? [];
+/**
+ * Extracts numbers as parsed floats, not raw strings: "70" and "70.0" must
+ * compare as the same value, not be treated as a false numeric_drift.
+ */
+function extractNumbers(text: string): number[] {
+  const matches = text.match(/\d+(\.\d+)?/g) ?? [];
+  return matches.map(Number);
+}
+
+async function checkServerReachable(): Promise<void> {
+  try {
+    const res = await fetch(BASE_URL);
+    if (!res.ok) {
+      throw new Error(`Server responded with HTTP ${res.status}`);
+    }
+  } catch (err) {
+    console.error(
+      `\nCannot reach ${BASE_URL} — is the app running? Start it with \`npm run dev\` first.\n` +
+        `(${err instanceof Error ? err.message : String(err)})`
+    );
+    process.exit(1);
+  }
 }
 
 async function runDataset(): Promise<FailureRecord[]> {
@@ -64,7 +85,7 @@ async function runDataset(): Promise<FailureRecord[]> {
           questionId: q.id,
           attemptNumber: attempt,
           answer: response.answer,
-          claimsJson: response.claims,
+          claimsJson: JSON.stringify(response.claims),
         },
       });
 
@@ -158,27 +179,57 @@ const SCOPE_TEST_CASES: ScopeTestCase[] = [
   },
 ];
 
+/**
+ * Exact-match on REFUSAL_MESSAGE is intentionally strict — it assumes every
+ * case below is caught by the code-level `checkRequest` guard (verified by
+ * `npm run test:scope`), which substitutes that exact constant before the
+ * model is ever called. If a future case is added that instead relies on the
+ * model voluntarily declining in its own words (not caught by the regex
+ * guard), this check would need to loosen to `claims.length === 0` plus a
+ * softer heuristic — an exact match would wrongly fail a legitimate,
+ * differently-worded decline.
+ */
 async function runScopeSuite(): Promise<FailureRecord[]> {
   const failures: FailureRecord[] = [];
 
   for (const testCase of SCOPE_TEST_CASES) {
     let conversationId: string | null = null;
-    let lastResponse: ChatApiResponse | null = null;
+    const responses: ChatApiResponse[] = [];
 
     for (const turn of testCase.turns) {
-      lastResponse = await callChat(conversationId, turn);
-      conversationId = lastResponse.conversationId;
+      const response = await callChat(conversationId, turn);
+      responses.push(response);
+      conversationId = response.conversationId;
     }
 
-    const declined = lastResponse !== null && lastResponse.claims.length === 0;
+    const lastResponse = responses[responses.length - 1];
+    const label = `${testCase.category}/${testCase.label}`;
+
+    // Assert on the actual refusal wording, not just an empty claims list —
+    // a model could hedge with zero claims without actually refusing.
+    const declined = lastResponse.answer === REFUSAL_MESSAGE && lastResponse.claims.length === 0;
     if (!declined) {
       failures.push({
         category: "missed_refusal",
         questionId: null,
-        detail: `Scope test [${testCase.category}/${testCase.label}] was not declined. Answer: "${lastResponse?.answer}"`,
+        detail: `Scope test [${label}] was not declined. Answer: "${lastResponse.answer}"`,
       });
     }
-    console.log(`Scope test ${testCase.category}/${testCase.label}: ${declined ? "PASS" : "FAIL"}`);
+
+    // Multi-turn cases (post_unrelated) must actually share one conversation —
+    // otherwise the test isn't exercising continuity at all.
+    if (testCase.turns.length > 1) {
+      const ids = new Set(responses.map((r) => r.conversationId));
+      if (ids.size > 1) {
+        failures.push({
+          category: "conversation_continuity_broken",
+          questionId: null,
+          detail: `Scope test [${label}] turns returned different conversationIds: ${[...ids].join(", ")}`,
+        });
+      }
+    }
+
+    console.log(`Scope test ${label}: ${declined ? "PASS" : "FAIL"}`);
   }
 
   return failures;
@@ -223,6 +274,7 @@ function writeFailureLogMarkdown(failures: FailureRecord[]) {
 
 async function main() {
   console.log(`Running evaluation against ${BASE_URL} (promptVersion=${PROMPT_VERSION})`);
+  await checkServerReachable();
 
   const datasetFailures = await runDataset();
   const scopeFailures = await runScopeSuite();

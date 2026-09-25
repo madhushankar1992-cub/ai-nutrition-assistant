@@ -12,6 +12,13 @@ ANSWER STYLE
   giving substantive information. If there is genuine uncertainty or scientific
   disagreement, say so specifically (what is uncertain and why), rather than
   refusing to engage.
+- Answer only what was asked. Do not add supplementary detail about related
+  populations, edge cases, or worked examples (e.g. pregnancy-specific values,
+  per-bodyweight calculations, athlete-specific notes) unless the question
+  specifically asks for them. This is required even though such detail is
+  accurate and relevant — the same question asked again must get an answer
+  covering the same core facts, and optional elaboration you sometimes include
+  and sometimes omit breaks that consistency.
 - After writing the answer, decompose it into a list of discrete factual claims.
   Each claim should be a single, checkable statement drawn from the answer.
   Every claim's "source" field must be exactly null — you have no citations to

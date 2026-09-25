@@ -6,7 +6,7 @@ See [Docs/problemStatement.md](Docs/problemStatement.md) for the requirements an
 
 ```bash
 npm install
-cp .env.local.example .env.local   # fill in ANTHROPIC_API_KEY and DATABASE_URL
+cp .env.local.example .env.local   # fill in GROQ_API_KEY and DATABASE_URL
 npm run prisma:migrate
 npm run dev
 ```

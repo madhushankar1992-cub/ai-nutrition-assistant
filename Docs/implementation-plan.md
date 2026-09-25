@@ -9,7 +9,7 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 **Goal:** an empty but runnable Next.js app, ready for feature work.
 
 - Initialize Next.js 14 (App Router) + TypeScript + Tailwind.
-- Add dependencies: `@anthropic-ai/sdk`, `zod`, `zod-to-json-schema`, `@prisma/client` + `prisma`, `uuid`, `tsx`.
+- Add dependencies: `groq-sdk`, `zod`, `zod-to-json-schema`, `@prisma/client` + `prisma`, `uuid`, `tsx`.
 - Create the folder structure from architecture.md §4 (`app/`, `components/`, `lib/`, `prisma/`, `data/`, `scripts/`).
 - Add `.env.local.example`, `.gitignore`.
 - `git init`, initial commit, create the GitHub repo, push.
@@ -44,9 +44,10 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 
 ## Phase 3 — LLM Integration
 
-**Goal:** a working, schema-validated call to Claude, independent of the API route or UI.
+**Goal:** a working, schema-validated call to Groq, independent of the API route or UI.
 
-- `lib/anthropic.ts`: Anthropic client, `submit_answer` tool built from `ChatResponseSchema` via `zodToJsonSchema`, forced `tool_choice`, one retry-with-correction on schema validation failure.
+- Model: **`openai/gpt-oss-120b`** (default), overridable via the `GROQ_MODEL` env var — e.g. to swap to `qwen/qwen3-32b` for a smaller/faster alternative without a code change.
+- `lib/groq.ts`: Groq client, `submit_answer` function tool built from `ChatResponseSchema` via `zodToJsonSchema`, forced `tool_choice: {type: "function", function: {name: "submit_answer"}}`, one retry-with-correction on schema validation failure.
 - Manual smoke test via a throwaway script or `tsx` REPL: call `generateStructuredAnswer` with a sample question, confirm the shape matches `ChatResponseSchema` and `source` is always `null`.
 
 **Exit criteria:** at least 5 varied manual questions return valid, schema-conformant JSON with `source: null` on every claim; a forced malformed case demonstrates the retry path.
@@ -125,7 +126,7 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 **Goal:** the public, reviewable deliverable required by problem-statement §7.
 
 - Push final code to GitHub (if not already continuous from Phase 0).
-- Create Vercel project linked to the repo; set `ANTHROPIC_API_KEY` and `DATABASE_URL` as environment variables; confirm `postinstall` runs `prisma generate` and migrations are applied to the production database.
+- Create Vercel project linked to the repo; set `GROQ_API_KEY` and `DATABASE_URL` as environment variables; confirm `postinstall` runs `prisma generate` and migrations are applied to the production database.
 - Smoke-test the deployed URL: one normal question, one scope-abuse question, confirm persistence works against the production database.
 
 **Exit criteria:** public URL live, both smoke tests pass, GitHub repo is the source of truth for the deployed build.

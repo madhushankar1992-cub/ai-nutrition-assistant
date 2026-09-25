@@ -2,6 +2,9 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Postgres (Supabase/Neon) — required for Vercel, whose serverless functions
+// have an ephemeral filesystem, and used for Railway too so both deployments
+// share one database. See Docs/deployment-plan.md.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -38,7 +41,7 @@ model EvalRun {
   questionId    String
   attemptNumber Int
   answer        String
-  claimsJson    Json
+  claimsJson    String // JSON-encoded array of { text, source }; kept as String (not Json) to avoid touching working eval code
 }
 
 model FailureLogEntry {

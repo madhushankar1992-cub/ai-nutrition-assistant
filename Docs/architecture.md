@@ -24,8 +24,8 @@ Derived from [problemStatement.md](problemStatement.md). This document defines t
 |---|---|---|
 | Frontend + Backend | **Next.js 14 (App Router) + TypeScript** | Single deployable app, API routes co-located with UI, first-class Vercel support, matches suggested tools |
 | UI styling | Tailwind CSS | Fast to build chat UI + sources panel without extra deps |
-| LLM provider | **Anthropic API (Claude)**, via `@anthropic-ai/sdk` | Native structured output via tool-use forcing (`tool_choice: {type: "tool"}`), matches suggested tools |
-| Schema validation | **Zod** | One schema shared by: Anthropic tool definition (JSON schema), API response validation, frontend types (`z.infer`) |
+| LLM provider | **Groq API** (`openai/gpt-oss-120b`, default), via `groq-sdk` | OpenAI-compatible chat completions with native function-calling forced via `tool_choice: {type: "function"}`; fast, low-cost inference. Model is overridable via `GROQ_MODEL` (e.g. `qwen/qwen3-32b`). |
+| Schema validation | **Zod** | One schema shared by: the Groq function-calling tool definition (JSON schema), API response validation, frontend types (`z.infer`) |
 | Database | **Postgres** (Supabase or Neon), accessed via **Prisma ORM** | Suggested tools list SQLite/Postgres/Supabase; Postgres is chosen over file-based SQLite because Vercel's serverless functions have an ephemeral filesystem — SQLite would lose data between invocations. Prisma keeps the option to point at SQLite for local dev via a different `DATABASE_URL`. |
 | Eval runner | Standalone Node/TypeScript script (`scripts/evaluate.ts`) | Decoupled from the web app; calls the deployed/local chat API like any client; writes results to the DB and to a human-readable Markdown log |
 | Deployment | **Vercel** | Zero-config Next.js hosting; env vars for API keys and `DATABASE_URL` |
@@ -53,7 +53,7 @@ Derived from [problemStatement.md](problemStatement.md). This document defines t
 │  1. Load/create conversation + history from DB                   │
 │  2. Scope Guard (pre-check) ──► reject/refuse before LLM call     │
 │  3. Build messages: system prompt + history + new user message   │
-│  4. Call Anthropic API with forced tool-use JSON schema           │
+│  4. Call Groq API with forced function-calling JSON schema        │
 │  5. Validate response against Zod schema                          │
 │  6. Scope Guard (post-check) ──► verify no leaked disallowed advice│
 │  7. Persist user message + assistant response + claims to DB      │
@@ -62,8 +62,8 @@ Derived from [problemStatement.md](problemStatement.md). This document defines t
                 │                               │
                 ▼                               ▼
      ┌─────────────────────┐        ┌───────────────────────────┐
-     │   Anthropic API      │        │   Postgres (Prisma)        │
-     │  (Claude, tool-use)  │        │  conversations, messages,  │
+     │   Groq API            │        │   Postgres (Prisma)        │
+     │  (gpt-oss-120b, tools)│        │  conversations, messages,  │
      │                       │        │  claims, eval_runs,        │
      │                       │        │  failure_log                │
      └───────────────────────┘        └───────────────────────────┘
@@ -102,7 +102,7 @@ AI Chatbot/
 │   ├── ChatInput.tsx
 │   └── SourcesPanel.tsx
 ├── lib/
-│   ├── anthropic.ts                # thin client wrapper, model config, retries
+│   ├── groq.ts                     # thin client wrapper, model config, retries
 │   ├── schema.ts                   # Zod schema: ChatResponse, Claim
 │   ├── systemPrompt.ts             # exported system prompt string/template
 │   ├── scopeGuard.ts               # pre- and post-call scope enforcement
@@ -127,7 +127,7 @@ AI Chatbot/
 - **Input box** — controlled input + submit button; disabled while a request is in flight; appends the optimistic user message immediately.
 - **Sources panel** — a fixed side panel that lists `claims` for the *currently selected* assistant message. In M1 every `source` is `null`, so it renders a placeholder state ("No sources yet — Milestone 2 will add citations") rather than being removed. This guarantees the M2 diff is additive only (fill the panel), never structural.
 
-State is held client-side (React `useState`/`useReducer`) keyed by `conversationId`; the client never talks to Anthropic directly and never sees an API key. Conversation history is re-fetched from the backend on load so refreshing the page preserves history (stored server-side, not just in browser state).
+State is held client-side (React `useState`/`useReducer`) keyed by `conversationId`; the client never talks to Groq directly and never sees an API key. Conversation history is re-fetched from the backend on load so refreshing the page preserves history (stored server-side, not just in browser state).
 
 ---
 
@@ -174,7 +174,7 @@ This contract is the one piece of the system explicitly frozen for Milestone 2 �
 1. **Load context** — fetch or create the `Conversation`, load prior `Message` rows for history.
 2. **Pre-call scope guard** (`lib/scopeGuard.ts`, `checkRequest`) — pattern/intent-based check on the *new user message*, run against the full conversation context (so a rephrased or indirect follow-up after unrelated messages is still caught). If flagged, skip the LLM call entirely and return the fixed refusal template. This is the code-level enforcement the spec requires independent of the system prompt.
 3. **Compose prompt** — system prompt (`lib/systemPrompt.ts`) + trailing window of prior messages + new user message.
-4. **Call Anthropic** with structured output enforced via tool-use (`tool_choice: {type: "tool", name: "submit_answer"}`), where the tool's `input_schema` is generated from the Zod schema. This makes free-text drift structurally impossible — the model must return the `{answer, claims[]}` shape.
+4. **Call Groq** with structured output enforced via function calling (`tool_choice: {type: "function", function: {name: "submit_answer"}}`), where the tool's `parameters` schema is generated from the Zod schema. This makes free-text drift structurally impossible — the model must return the `{answer, claims[]}` shape.
 5. **Schema validation** (`lib/schema.ts`, `ChatResponseSchema.parse`) — if it fails, retry the call once with an explicit correction instruction; if it fails again, return the 422 failure path and log it.
 6. **Force `source: null`** — even though the schema/tool definition instructs the model to always emit `null`, the code defensively overwrites any non-null `source` value before persisting/returning, so a prompt-injection or model slip can't leak a fabricated citation in M1.
 7. **Post-call scope guard** (`checkResponse`) — scans the generated `answer` for disallowed content (numeric calorie/weight targets, condition-specific medical directives) that may have slipped through despite the prompt; if detected, discard the answer and substitute the refusal template. Logged as a `failure_log` entry (`type: missed_refusal`) either way, so these are visible in evaluation even when the guard successfully catches them.
@@ -229,7 +229,7 @@ model EvalRun {
   questionId    String   // key into data/eval-questions.json
   attemptNumber Int      // 1..3
   answer        String
-  claimsJson    Json
+  claimsJson    String   // JSON-encoded; SQLite has no native Json type
 }
 
 model FailureLogEntry {
@@ -263,7 +263,7 @@ export const ChatResponseSchema = z.object({
 });
 ```
 
-This same object is converted to a JSON schema and passed as the Anthropic tool's `input_schema`, so the model is structurally forced to emit `source: null` rather than merely instructed to.
+This same object is converted to a JSON schema and passed as the Groq function tool's `parameters`, so the model is structurally forced to emit `source: null` rather than merely instructed to.
 
 ### 8.2 System Prompt (`lib/systemPrompt.ts`)
 
@@ -274,10 +274,12 @@ Defines, per Section 3 of the problem statement:
 - **Claims extraction instruction**: explicitly decompose the answer into discrete factual claims, one per list item, each mapped to `source: null`.
 - **Excluded topics**: calorie/weight targets, personal weight recommendations, medical/condition-specific diet advice — with an instruction to refuse and refer to a qualified professional, matching the code-level `scopeGuard` so prompt and code agree (defense in depth, not a substitute for the code check).
 
-### 8.3 Model Call Wrapper (`lib/anthropic.ts`)
+### 8.3 Model Call Wrapper (`lib/groq.ts`)
 
-- Single place holding model name, `max_tokens`, `temperature` (kept low/deterministic to reduce run-to-run numeric drift, though drift is still measured, not assumed away), and retry-on-invalid-schema logic.
-- Reads `ANTHROPIC_API_KEY` from server-only env var — never exposed via `NEXT_PUBLIC_*`.
+- Single place holding model name (`openai/gpt-oss-120b`, overridable via `GROQ_MODEL`, e.g. `qwen/qwen3-32b`), `max_tokens`, `temperature` (kept low/deterministic to reduce run-to-run numeric drift, though drift is still measured, not assumed away), and retry-on-invalid-schema logic.
+- Reads `GROQ_API_KEY` from server-only env var — never exposed via `NEXT_PUBLIC_*`.
+- **Rate limiting** (`lib/rateLimiter.ts`): `openai/gpt-oss-120b` on Groq is capped at 30 requests/min, 8,000 tokens/min, 1,000 requests/day, 200,000 tokens/day — tokens/min is the binding constraint once prompt + completion tokens are counted, not requests/min. Before each call, `callOnce` estimates the request's token cost and calls `groqRateLimiter.reserve(estimatedTokens)`, which blocks until there's room in a rolling 60s window (targeting 25 req/min and 7,000 tokens/min, a safety margin under the stated limits) and throws immediately if the daily budget is already spent. This is an in-memory, best-effort limiter — it holds within one running process but does not coordinate across multiple serverless instances or survive a restart (see Docs/edge-cases.md). The authoritative backstop is `Groq.RateLimitError` (HTTP 429) handling in `callOnce`, which retries with backoff honoring the `Retry-After` header, separately from the schema-validation retry.
+- Conversation history sent per call is capped at the last `MAX_HISTORY_TURNS` (8) turns, bounding prompt token growth on long conversations independent of the rate limiter.
 
 ---
 
@@ -295,7 +297,7 @@ Defines, per Section 3 of the problem statement:
 
 `.env.local` (never committed; `.env.local.example` documents keys):
 ```
-ANTHROPIC_API_KEY=
+GROQ_API_KEY=
 DATABASE_URL=          # Postgres connection string (Supabase/Neon/etc.)
 ```
 
@@ -307,7 +309,7 @@ Both are server-only; Next.js API routes and `scripts/evaluate.ts` read them via
 
 - **Vercel** hosts the Next.js app directly from GitHub (auto-deploy on push to `main`).
 - Postgres provisioned via Supabase (or Neon), `DATABASE_URL` set as a Vercel project env var; `prisma migrate deploy` run as part of the build step.
-- `ANTHROPIC_API_KEY` set as a Vercel encrypted env var.
+- `GROQ_API_KEY` set as a Vercel encrypted env var.
 - `scripts/evaluate.ts` is run manually/CI-side against either `localhost` or the deployed URL — it is a dev tool, not part of the deployed app bundle.
 
 ---
@@ -319,7 +321,7 @@ Both are server-only; Next.js API routes and `scripts/evaluate.ts` read them via
 | `ClaimSchema.source` | `z.null()` | `z.string().url().nullable()` — widen the type, no field rename |
 | `SourcesPanel` component | Renders empty/placeholder | Same component renders populated `source` links — no new component needed |
 | API response shape | `{answer, claims[]}` | Unchanged |
-| Backend pipeline | Steps 1–9 in §6.2 | Insert a retrieval step between "compose prompt" and "call Anthropic" (fetch supporting passages, inject into context) and pass real citations through to `source` instead of forcing `null` |
+| Backend pipeline | Steps 1–9 in §6.2 | Insert a retrieval step between "compose prompt" and "call Groq" (fetch supporting passages, inject into context) and pass real citations through to `source` instead of forcing `null` |
 | Eval harness | Compares runs against each other | Same 10 questions rerun, diffed against the stored M1 `FailureLogEntry` baseline to quantify improvement |
 
 This is the concrete mechanism behind the problem statement's requirement to "preserve the interface, endpoints and response structure" — every M1 component is designed as the identity case of its M2 counterpart, not a stand-in to be replaced.

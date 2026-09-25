@@ -1,40 +1,68 @@
 "use client";
 
-import { useState } from "react";
+import { useRef } from "react";
+import { SendIcon } from "./icons";
 
 export function ChatInput({
+  value,
+  onChange,
   disabled,
   onSend,
 }: {
+  value: string;
+  onChange: (value: string) => void;
   disabled: boolean;
   onSend: (message: string) => void;
 }) {
-  const [value, setValue] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function resize(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }
+
+  function submit() {
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
     onSend(trimmed);
-    setValue("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 border-t border-slate-200 bg-white p-4">
-      <input
+    <div className="flex items-end gap-2.5 rounded-3xl border border-white/10 bg-surface px-3 py-2 transition focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/20">
+      <label htmlFor="composer" className="sr-only">
+        Ask a question
+      </label>
+      <textarea
+        id="composer"
+        ref={textareaRef}
+        rows={1}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          resize(e.target);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
         disabled={disabled}
-        placeholder="Ask about food, nutrition, cooking, or food safety..."
-        className="flex-1 rounded-full border border-slate-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:bg-slate-100"
+        placeholder="Ask about food, nutrition, cooking, or food safety…"
+        className="max-h-[120px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:text-ink-faint"
       />
       <button
-        type="submit"
+        type="button"
+        onClick={submit}
         disabled={disabled || !value.trim()}
-        className="rounded-full bg-blue-600 px-5 py-2 text-sm font-medium text-white disabled:bg-slate-300"
+        aria-label="Send message"
+        className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full bg-accent shadow-[0_0_18px_rgba(200,255,77,0.3)] transition hover:brightness-110 disabled:bg-white/10 disabled:shadow-none"
       >
-        Send
+        <SendIcon className="h-[17px] w-[17px] translate-x-[1px] text-bg" />
       </button>
-    </form>
+    </div>
   );
 }
