@@ -1,5 +1,7 @@
 # AI Nutrition Assistant (Milestone 1)
 
+**Live:** [Vercel](https://ai-nutrition-assistant-self.vercel.app) · [Railway](https://app-production-3fe4f.up.railway.app) — both share the same Railway-hosted Postgres database.
+
 See [Docs/problemStatement.md](Docs/problemStatement.md) for the requirements and [Docs/architecture.md](Docs/architecture.md) for the technical design.
 
 ## Setup
@@ -25,4 +27,8 @@ This runs the fixed 10-question dataset (`data/eval-questions.json`) three times
 
 ## Deployment
 
-Deploy to Vercel, setting `ANTHROPIC_API_KEY` and `DATABASE_URL` (Postgres, e.g. Supabase/Neon) as project environment variables. `npm run build` runs `prisma generate` via the `postinstall`/build pipeline.
+Deployed to both Vercel and Railway, sharing one Postgres database (provisioned on Railway). See [Docs/deployment-plan.md](Docs/deployment-plan.md) for the full setup. In short:
+
+- Set `GROQ_API_KEY`, `GROQ_MODEL`, and `DATABASE_URL` as project environment variables on each platform.
+- `npm run build` runs `prisma generate` via the `postinstall` hook.
+- `npm start` (`next start -H 0.0.0.0 -p ${PORT:-3000}`) — the explicit host/port binding is required for Railway's proxy to reach the container; Vercel's serverless runtime doesn't use this script at all.

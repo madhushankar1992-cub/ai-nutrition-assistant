@@ -138,14 +138,14 @@ If only one is actually needed going forward, decommission the other via its das
 
 ## 7. Post-Deployment Checklist
 
-- [ ] Postgres provisioned, migrated, and verified (5 empty tables)
-- [ ] `prisma/schema.prisma` datasource is `postgresql`, committed
-- [ ] GitHub repo created and pushed
-- [ ] Vercel: env vars set, `maxDuration` added, deployed, smoke-tested
-- [ ] Railway: env vars set, deployed, smoke-tested
-- [ ] Both URLs confirmed writing to the same database (no drift)
+- [x] Postgres provisioned, migrated, and verified (5 empty tables) — provisioned on **Railway** (not Supabase/Neon — see §9 "What Actually Happened"), shared by both deployments
+- [x] `prisma/schema.prisma` datasource is `postgresql`, committed
+- [x] GitHub repo created and pushed: https://github.com/madhushankar1992-cub/ai-nutrition-assistant
+- [x] Vercel: env vars set, `maxDuration` added, deployed, smoke-tested — https://ai-nutrition-assistant-self.vercel.app
+- [x] Railway: env vars set, deployed, smoke-tested — https://app-production-3fe4f.up.railway.app
+- [x] Both URLs confirmed writing to the same database
 - [ ] `Docs/failure-log.md` / `Docs/prompt-iteration-log.md` reflect the current prompt version running in production
-- [ ] `README.md` updated with the live URL(s) for the deliverable
+- [x] `README.md` updated with the live URL(s) for the deliverable
 
 ---
 
@@ -154,3 +154,16 @@ If only one is actually needed going forward, decommission the other via its das
 - **Rate limiting the public endpoint itself** (distinct from the Groq-facing limiter already in `lib/rateLimiter.ts`) — flagged as an open gap in `Docs/edge-cases.md`; worth adding before wide public sharing of either URL, not required to complete the Milestone 1 deliverable.
 - **A health-check endpoint** (`GET /api/health`) to verify env vars post-deploy — also flagged as a gap; recommended as a fast follow, not a hard blocker for the first deploy.
 - **CI-driven migrations** — this plan runs `prisma migrate deploy` manually once; wiring it into a GitHub Action is a reasonable next step once the deployment is stable, not part of the initial deploy.
+
+---
+
+## 9. What Actually Happened (deviations from the plan above, and real gotchas hit)
+
+- **Database provider**: used **Railway's own Postgres** (`railway add --database postgres`) instead of Supabase/Neon — no external account was available, and Railway's CLI could provision one directly. A public TCP proxy had to be created explicitly (`railway tcp-proxy create --port 5432`) since Railway's default `DATABASE_URL` (`postgres.railway.internal`) is only reachable from inside Railway's private network, not from a local machine or from Vercel.
+- **Railway free-tier project limit**: `railway init` initially failed with "Free plan resource provision limit exceeded." Resolved by deleting an unrelated existing project (`resplendent-motivation`) with the user's explicit confirmation — Railway schedules project deletion with a ~2-day grace period rather than deleting instantly, but the resource slot freed up immediately.
+- **Stray seed table**: the freshly provisioned Railway Postgres template came with a pre-seeded placeholder table (`xyz`, a single `id` column, no data) — this caused `prisma migrate deploy`'s P3005 "database schema is not empty" error. Dropped manually (`DROP TABLE IF EXISTS "xyz"`) before migrating, since it wasn't part of any real schema.
+- **`migrate dev` doesn't work non-interactively**: since there was no existing Postgres migration (the SQLite one was removed — see §2), the first migration had to be generated some other way. `prisma migrate dev` refuses to run in a non-interactive shell. Worked around with `prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` to generate the SQL directly, then applied it with `prisma migrate deploy` (after manually creating `migration_lock.toml` with `provider = "postgresql"`).
+- **Railway port binding — two separate bugs, not one**: Railway deployments 502'd twice before working:
+  1. `next start` defaults to binding only `localhost`, not all interfaces — fixed with `next start -H 0.0.0.0 -p ${PORT:-3000}` in `package.json`'s `start` script (this has no effect on Vercel, which never runs this script).
+  2. Even after that fix, the domain still 502'd — `railway domain --port 3000` had set the wrong target port. Railway injects its own dynamic `PORT` (in this case `8080`), and the domain's configured `targetPort` must match it exactly, or the proxy connects to a port nothing is listening on. Fixed with `railway domain update <domain> --port 8080`. **Takeaway: whatever port the app logs it's listening on at runtime is the port the domain must target — don't assume it matches whatever port you specified when first creating the domain.**
+- **Vercel↔GitHub auto-deploy not connected**: `vercel link`/`vercel git connect` both failed with "You need to add a Login Connection to your GitHub account first" — this is an account-level OAuth connection only doable via the Vercel dashboard UI, not scriptable via CLI. Deploys are done directly via `vercel --prod` (uploads and builds local code) instead of git-push-triggered deploys. Connecting GitHub in the dashboard later would enable auto-deploy without any code changes.
