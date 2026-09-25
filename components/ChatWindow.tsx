@@ -25,22 +25,22 @@ function Header({
   onClear: () => void;
 }) {
   return (
-    <div className="flex h-[78px] shrink-0 items-center justify-between border-b border-white/10 px-10">
-      <div className="flex items-center gap-3.5">
-        <div className="flex h-[42px] w-[42px] items-center justify-center rounded-xl bg-accent shadow-[0_0_24px_rgba(200,255,77,0.35)]">
-          <LeafIcon className="h-[21px] w-[21px] text-bg" />
+    <div className="flex h-[64px] shrink-0 items-center justify-between gap-2 border-b border-white/10 px-4 sm:h-[78px] sm:px-10">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3.5">
+        <div className="flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-xl bg-accent shadow-[0_0_24px_rgba(200,255,77,0.35)] sm:h-[42px] sm:w-[42px]">
+          <LeafIcon className="h-[18px] w-[18px] text-bg sm:h-[21px] sm:w-[21px]" />
         </div>
-        <div>
-          <h1 className="font-display text-[21px] font-semibold tracking-tight text-ink">
+        <div className="min-w-0">
+          <h1 className="truncate font-display text-[16px] font-semibold tracking-tight text-ink sm:text-[21px]">
             AI Nutrition Assistant
           </h1>
-          <p className="text-[12.5px] text-ink-muted">
+          <p className="hidden truncate text-[12.5px] text-ink-muted sm:block">
             Grounded, general-knowledge answers — Milestone 1
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-2.5">
-        <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-wider text-accent">
+      <div className="flex shrink-0 items-center gap-2 sm:gap-2.5">
+        <span className="hidden rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-wider text-accent sm:inline-flex">
           No citations yet
         </span>
         {hasMessages && (
@@ -50,17 +50,17 @@ function Header({
             disabled={isClearing}
             aria-label="Clear chat history"
             title="Clear chat history"
-            className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/10 bg-surface transition hover:border-red-400/40 hover:text-red-400 disabled:opacity-50"
+            className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-white/10 bg-surface transition hover:border-red-400/40 hover:text-red-400 disabled:opacity-50 sm:h-[38px] sm:w-[38px]"
           >
-            <TrashIcon className="h-[16px] w-[16px] text-ink-muted" />
+            <TrashIcon className="h-[15px] w-[15px] text-ink-muted sm:h-[16px] sm:w-[16px]" />
           </button>
         )}
         <button
           type="button"
           aria-label="Settings"
-          className="flex h-[38px] w-[38px] items-center justify-center rounded-full border border-white/10 bg-surface"
+          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-white/10 bg-surface sm:h-[38px] sm:w-[38px]"
         >
-          <SettingsIcon className="h-[17px] w-[17px] text-ink-muted" />
+          <SettingsIcon className="h-[16px] w-[16px] text-ink-muted sm:h-[17px] sm:w-[17px]" />
         </button>
       </div>
     </div>
@@ -84,21 +84,21 @@ function TypingIndicator() {
 
 function EmptyState({ onPick }: { onPick: (question: string) => void }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-10">
-      <HeroMark className="mb-6 h-[84px] w-[84px]" />
-      <h2 className="text-center font-display text-4xl font-semibold tracking-tight text-ink">
+    <div className="flex flex-1 flex-col items-center justify-center px-5 sm:px-10">
+      <HeroMark className="mb-5 h-[64px] w-[64px] sm:mb-6 sm:h-[84px] sm:w-[84px]" />
+      <h2 className="text-center font-display text-2xl font-semibold tracking-tight text-ink sm:text-4xl">
         What would you like to know?
       </h2>
-      <p className="mt-2.5 max-w-[480px] text-center text-base leading-relaxed text-ink-muted">
+      <p className="mt-2.5 max-w-[480px] text-center text-sm leading-relaxed text-ink-muted sm:text-base">
         Ask about nutrients, food safety, storage, or cooking. I can&apos;t give calorie targets,
         weight advice, or medical guidance — for that, please see a qualified professional.
       </p>
-      <div className="mt-9 flex max-w-[640px] flex-wrap justify-center gap-3.5">
+      <div className="mt-7 flex max-w-[640px] flex-wrap justify-center gap-2.5 sm:mt-9 sm:gap-3.5">
         {SUGGESTED_QUESTIONS.map((q) => (
           <button
             key={q}
             onClick={() => onPick(q)}
-            className="rounded-2xl border border-white/10 bg-surface px-[18px] py-[13px] text-sm text-ink transition hover:border-accent/40 hover:bg-white/[0.06]"
+            className="rounded-2xl border border-white/10 bg-surface px-3.5 py-2.5 text-sm text-ink transition hover:border-accent/40 hover:bg-white/[0.06] sm:px-[18px] sm:py-[13px]"
           >
             {q}
           </button>
@@ -192,7 +192,7 @@ export function ChatWindow() {
           {isEmpty ? (
             <EmptyState onPick={setDraft} />
           ) : (
-            <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-[22px] px-10 py-9">
+            <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-[18px] px-4 py-6 sm:gap-[22px] sm:px-10 sm:py-9">
               {messages.map((m) => (
                 <MessageBubble
                   key={m.id}
@@ -207,7 +207,7 @@ export function ChatWindow() {
           )}
         </div>
 
-        <div className="flex shrink-0 justify-center px-10 pb-[26px] pt-[22px]">
+        <div className="flex shrink-0 justify-center px-4 pb-5 pt-4 sm:px-10 sm:pb-[26px] sm:pt-[22px]">
           <div className="w-full max-w-[720px]">
             <ChatInput value={draft} onChange={setDraft} disabled={isLoading} onSend={handleSend} />
             <p className="mt-2.5 text-center text-[11.5px] text-ink-faint">
