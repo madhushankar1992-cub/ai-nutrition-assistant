@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { MessageBubble, type ChatMessage } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
 import { SourcesPanel } from "./SourcesPanel";
-import { LeafIcon, SettingsIcon, HeroMark, TrashIcon } from "./icons";
+import { LeafIcon, HeroMark, TrashIcon } from "./icons";
 
 const SUGGESTED_QUESTIONS = [
   "How much vitamin C do I need per day?",
@@ -55,13 +55,6 @@ function Header({
             <TrashIcon className="h-[15px] w-[15px] text-ink-muted sm:h-[16px] sm:w-[16px]" />
           </button>
         )}
-        <button
-          type="button"
-          aria-label="Settings"
-          className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-white/10 bg-surface sm:h-[38px] sm:w-[38px]"
-        >
-          <SettingsIcon className="h-[16px] w-[16px] text-ink-muted sm:h-[17px] sm:w-[17px]" />
-        </button>
       </div>
     </div>
   );
