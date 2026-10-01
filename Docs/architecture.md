@@ -329,7 +329,7 @@ export const ChatRequestSchema = z.object({
 ### 8.2 System Prompt (`lib/systemPrompt.ts`)
 
 `SYSTEM_PROMPT` is a single exported template string defining:
-- **Role** — nutrition/food-safety/cooking Q&A using general knowledge only; explicitly told never to claim it looked anything up (no retrieval exists yet).
+- **Role** — named persona "Sage"; nutrition/food-safety/cooking Q&A using general knowledge only; explicitly told never to claim it looked anything up (no retrieval exists yet); states its name as Sage if asked.
 - **Answer style** — concise, ~150 words or fewer, no unhelpful hedging without substance, and a specific instruction to answer *only* what was asked without volunteering adjacent detail (pregnancy-specific values, per-bodyweight math, athlete notes) unless asked — added so the same question gets a comparable answer across the 3x eval repeats instead of sometimes including extra material and sometimes not.
 - **Claims decomposition** — after writing the answer, break it into discrete checkable claims, each with `source` forced to `null`.
 - **Out-of-scope declines** — calorie/macro/weight-loss numeric targets, personal weight recommendations, and condition-specific medical advice, explicitly including rephrased/indirect/multi-turn/re-asked variants — matching the code-level `scopeGuard` so prompt and code agree (defense in depth; the prompt is not relied on alone).
