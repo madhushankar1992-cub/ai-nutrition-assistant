@@ -11,6 +11,31 @@ import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 // embeds the query and hits the vector store first. Hobby plan max is 60s.
 export const maxDuration = 60;
 
+// Retrieval embeds the query locally with bge-small (ONNX, ~130 MB of weights),
+// which loads in a long-running container but NOT in a serverless function.
+// Where BACKEND_API_URL is set — i.e. on the Vercel frontend — this route
+// forwards to the container instead of trying to run retrieval itself.
+//
+// A next.config rewrite does not work for this: Next gives filesystem routes
+// precedence over rewrites, so this handler would still win. Forwarding has to
+// happen inside the handler. Doing it server-side also keeps the browser
+// talking to one origin, so there is no CORS to configure.
+const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace(/\/$/, "");
+
+async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResponse> {
+  const target = `${BACKEND_API_URL}/api/chat${req.nextUrl.search}`;
+  const upstream = await fetch(target, {
+    method: req.method,
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const text = await upstream.text();
+  return new NextResponse(text, {
+    status: upstream.status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 async function logFailure(category: string, detail: string) {
   await prisma.failureLogEntry.create({ data: { category, detail } });
 }
@@ -28,7 +53,16 @@ function notInCorpusMessage(docs: { name: string; publisher: string; year: numbe
 }
 
 export async function POST(req: NextRequest) {
-  const parsedRequest = ChatRequestSchema.safeParse(await req.json());
+  const raw = await req.text();
+  if (BACKEND_API_URL) return proxyToBackend(req, raw);
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+  const parsedRequest = ChatRequestSchema.safeParse(payload);
   if (!parsedRequest.success) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
@@ -195,6 +229,8 @@ export async function POST(req: NextRequest) {
  * Never touches Document or Chunk: those are corpus data, not user data.
  */
 export async function DELETE(req: NextRequest) {
+  if (BACKEND_API_URL) return proxyToBackend(req);
+
   const conversationId = req.nextUrl.searchParams.get("conversationId");
   if (!conversationId) {
     return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
