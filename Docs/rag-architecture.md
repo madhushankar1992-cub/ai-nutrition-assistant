@@ -718,10 +718,10 @@ Milestone 2 `[TO BUILD]` — identical shape, `source` populated, `retrieval` **
     {
       "text": "Adults should limit free sugars to less than 10% of total energy intake.",
       "source": {
-        "document": "Healthy diet (Fact sheet No. 394)",
+        "document": "Healthy diet (fact sheet)",
         "publisher": "World Health Organization",
         "year": 2018,
-        "url": "https://www.who.int/publications/m/item/healthy-diet-factsheet394",
+        "url": "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
         "section": "Key facts",
         "page": null,
         "chunkId": "a1b2c3d4-…"
@@ -1212,7 +1212,7 @@ Chunk {
   page         -> locator the reader can open
   text         -> the passage
   tokenCount   -> token budget accounting
-  kind         -> prose | table | list
+  kind         -> prose | table | references | toc
   restricted   -> contains calorie / per-kg-bodyweight targets
   configHash   -> which config produced it
   embedding    -> vector(1536)

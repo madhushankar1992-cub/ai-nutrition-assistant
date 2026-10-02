@@ -42,7 +42,7 @@ model Chunk {
   page              Int
   text              String
   tokenCount        Int
-  kind              String      // prose | table
+  kind              String      // prose | table | references | toc (the last two are never retrieved)
   restricted        Boolean     // calorie / per-kg-bodyweight content
   configHash        String      // which RetrievalConfig produced this chunk
   @@unique([documentId, configHash, ordinal])

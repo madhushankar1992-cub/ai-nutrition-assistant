@@ -78,7 +78,7 @@ Order matters because all three read one database.
 3. **Backend to Render.**
    - Build: `npm ci && npx prisma generate && npm run build`
    - Start: `npm start`
-   - Health check: `/api/chat` (expects POST; a GET 405 still proves the route is live)
+   - Health check: `GET /api/chat` — returns 200 with API, database and corpus status, or 503 if the corpus is unreachable
 4. **Frontend to Vercel.** `vercel --prod`. **Vercel does not auto-deploy on push** unless its GitHub app is linked, so verify the live URL rather than assuming.
 5. **Scheduler.** Add `DATABASE_URL` as a repository secret; trigger `workflow_dispatch` once to confirm before relying on the cron.
 

@@ -29,8 +29,23 @@ Too small: *"3–4 days"* with no indication of what food or what temperature. T
 | `CHUNK_HARD_CAP_TOKENS` | **900** | Tables keep integrity up to here before being flagged oversized |
 | `CHUNK_OVERLAP_TOKENS` | **80** (~16%) | Carries a sentence straddling a paragraph break without inflating the index |
 | `MIN_CHUNK_TOKENS` | **120** | Below this a chunk retrieves on noise and cannot carry a checkable claim |
+| `HTML_CHUNK_TARGET_TOKENS` | **220** | HTML has no page breaks to act as topic boundaries, so the 500 target produced 757-token chunks spanning three unrelated topics. Every candidate then contained every query term and nothing could outrank anything |
 
 All four live in `lib/retrievalConfig.ts` and are hashed into `configHash`, stored on every chunk. Changing one makes every existing chunk detectably stale.
+
+**Chunk kinds.** Every chunk is classified, and two of the four kinds are never retrievable:
+
+| Kind | Retrievable | What it is |
+|---|---|---|
+| `prose` | yes | Running text — the default |
+| `table` | yes | A detected data table, kept whole even past the cap, because half a table cites a number whose column header is in another chunk |
+| `references` | **no** | A bibliography. Built from the vocabulary of the chapters it indexes, so it matches their questions and answers none |
+| `toc` | **no** | A contents listing, for the same reason |
+
+The two exclusions are applied in `queryChunks`'s `WHERE` clause rather than filtered afterwards, so
+they never consume slots in the candidate pool. Their thresholds are measured against the real
+corpus and separate widely: citations per 100 words run 4.8–12.6 for bibliographies and ≤1.8 for
+everything else; dot leaders run 7.7–31.1 for contents pages and exactly 0 for every other chunk.
 
 ---
 
@@ -95,29 +110,40 @@ Each threshold exists because a simpler rule failed on real documents:
 
 ## 5. Measured results
 
-From the live store (213 chunks, 7 documents):
+From the live store (229 chunks, 7 documents):
 
 ```
-min=22  p25=247  median=462  p75=484  max=819  mean=388
-under floor (<120): 3 (1.4%)      over cap (>900): 0 (0.0%)
-prose=201  table=12  restricted=9
+min=31  p25=220  median=454  p75=481  max=819  mean=375
+under floor (<120): 3 (1.3%)      over cap (>900): 0 (0.0%)
+prose=205  table=12  references=7  toc=5  restricted=11
 ```
 
 | Document | Chunks | Mean | Min | Max | Under 120 |
 |---|---|---|---|---|---|
 | EFSA — Dietary Reference Values | 150 | 439 | 121 | 643 | 0 |
+| WHO — Healthy diet (fact sheet) | 32 | 210 | 146 | 329 | 0 |
 | The Eatwell Guide | 15 | 414 | 135 | 625 | 0 |
 | DGA 2025–2030 | 14 | 300 | 145 | 819 | 0 |
-| FSA — chill/freeze/defrost | 11 | 255 | 76 | 757 | 1 |
-| WHO — Sodium guideline | 9 | 136 | 22 | 302 | 1 |
-| WHO — Healthy diet | 7 | 195 | 116 | 603 | 1 |
-| WHO — Five keys | 7 | 132 | 120 | 152 | 0 |
+| FSA — chill/freeze/defrost | 12 | 189 | 129 | 321 | 0 |
+| WHO — Sodium guideline | 4 | 138 | 57 | 191 | 2 |
+| WHO — Five keys | 2 | 91 | 31 | 151 | 1 |
 
-**Section confidence** (how much to trust a citation's section label): `numbered` 46.6% · `typographic` 51.3% · `inherited` 2.2%.
+**Section confidence** (how much to trust a citation's section label): `numbered` 45.9% · `typographic` 34.1% · `outline` 18.3% · `inherited` 1.7%.
+
+`outline` is new and is the most trustworthy of the four: it means the section label was read from
+an actual `<h1>`–`<h6>` in the source HTML rather than inferred from capitalisation. Every HTML
+source now contributes `outline` labels instead of `typographic` guesses.
+
+**The WHO and FSA counts moved sharply in both directions, and both moves are the point.** WHO went
+7 → 32 because six of its old seven chunks were navigation menus, not text; the sodium guideline and
+Five keys went 9 → 4 and 7 → 2 for the same reason, with no loss of content — those two sources are
+publication landing pages whose real body is a short overview, and what was removed was the WHO site
+header and footer. FSA went 11 → 12 with its maximum falling 757 → 321, because the chrome that used
+to pad its chunks is gone.
 
 ---
 
-## 6. Four bugs the analysis caught
+## 6. Eight bugs the analysis caught
 
 None of these were visible from reasoning about the design. All were found by running the chunker over real documents and measuring the output.
 
@@ -128,7 +154,19 @@ None of these were visible from reasoning about the design. All were found by ru
 | 3 | No minimum chunk size enforced | Nothing stopped a heading closing a 2-line section | Refuse to flush while the buffer is under `MIN_CHUNK_TOKENS` | — |
 | 4 | **44 chunks (19%) still under the floor**, all in HTML sources | The guard measured the **raw** buffer; the emitted chunk is whitespace-**normalised**, so indentation inflated the estimate — a "130 token" buffer became a 40-token chunk | Measure the buffer after normalisation, and merge runt pieces forward | **19% → 1.4%**, mean 355 → 388 |
 
-Bug 4 is the instructive one: the guard and the thing it guarded were measuring different strings. It would never have shown up without distribution analysis over real output.
+| 5 | WHO fact sheet produced 7 chunks, 6 of them menus | HTML extraction stripped `<script>` and `<style>` but kept `<nav>`, `<header>` and `<footer>` — so "Skip to main content … Dengue Endometriosis Mpox" was ingested as document text | Narrow to the single unambiguous `<main>`/`<article>` container, then drop chrome tags | WHO 7 → **32** real chunks; the one content chunk went from rank 27 to rank 1 |
+| 6 | Bibliographies outranked real passages | A reference list is built from the exact vocabulary of the chapters it indexes, so it matches their questions while answering none. Three EFSA reference chunks took ranks 2–4 on the fibre question | Classify by citation density (≥3 per 100 words) and dot-leader density (≥1 per 100 words); exclude both kinds in the retrieval query | 12 chunks excluded; `recall@5` 76.5% → **100%** |
+| 7 | WHO's salt limit was cited as `§Protein` | Section detection guessed from capitalisation even on HTML, where the markup already says. "Salt/sodium and potassium" failed the Title-Case test because one of its two long words is lowercase | Mark real `<h1>`–`<h6>` during extraction and take them verbatim | 18.3% of sections now `outline`, the highest-confidence label |
+| 8 | "400 g fruit and vegetables" was in no chunk at all | Not a chunking bug: the registered URL was a publication **stub**, not the fact sheet. It returned 200 and read as a plausible document, so no guard fired | Point at the maintained news-room fact sheet | 810 → 3,000 words; the fruit/veg question became answerable |
+
+Bug 4 is the instructive one on measurement: the guard and the thing it guarded were measuring
+different strings. It would never have shown up without distribution analysis over real output.
+
+Bugs 5, 6 and 8 are the instructive ones on **trust**. Each produced a corpus that looked healthy by
+every aggregate the pipeline reported — document count, word count, chunk count, embedding count all
+green — while the text inside was navigation furniture, a bibliography, or simply the wrong page.
+Counting artefacts cannot detect this; only reading the stored text and testing whether a known
+answer can be retrieved can.
 
 ---
 
@@ -190,8 +228,10 @@ That is **~1–1.5 requests per minute**. A full evaluation is 60+ calls, so **4
 
 | # | Item | Status |
 |---|---|---|
-| 1 | 3 chunks still under the floor (HTML tails) | Accept, or special-case HTML tail merging |
-| 2 | Heading misdetection on 6 of 92 sections | Accept — imprecise, not incorrect |
+| 1 | 3 chunks still under the floor | Accept. All three are in the two WHO landing pages, whose entire body is shorter than one normal chunk |
+| 2 | Heading misdetection on PDF sections | Accept — imprecise, not incorrect. No longer applies to HTML, which uses its own `<h*>` outline |
 | 3 | Near-duplicate suppression after retrieval | Not implemented; overlap makes it worthwhile |
 | 4 | Linearised table rendering (`col: value`) for embedding | Untested against raw table text |
-| 5 | **Leftovers query ranks the wrong chunk first** | **Open** — the 48-hour rule exists but ranks below a fridge-power-setting passage. A `recall@k` problem, to be measured before tuning |
+| 5 | ~~Leftovers query ranks the wrong chunk first~~ | **Closed.** Cause was chunk size, not ranking: HTML has no page breaks, so a 500-token target produced 757-token chunks containing every query term. `HTML_CHUNK_TARGET_TOKENS = 220` + density-based lexical scoring. Now rank 1 |
+| 6 | ~~EFSA returns the right document, wrong section~~ | **Closed** by bug 6 above — bibliographies and contents pages excluded from retrieval |
+| 7 | Chrome stripping is regex-based, not a DOM parse | Accept for a 9-document corpus, and it is guarded: a container yielding under 50 words is rejected and the full page used instead. A new HTML source should be checked with `npm run vectors` after its first ingest |
