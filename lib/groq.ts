@@ -1,7 +1,7 @@
 import Groq from "groq-sdk";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { ChatResponseSchema, type ChatResponse } from "./schema";
-import { SYSTEM_PROMPT } from "./systemPrompt";
+import { M1ResponseSchema, LlmResponseSchema, type LlmResponse } from "./schema";
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_RAG } from "./systemPrompt";
 import { groqRateLimiter, estimateTokens } from "./rateLimiter";
 
 const client = new Groq({
@@ -19,9 +19,17 @@ const TEMPERATURE = 0.2; // low but nonzero: reduces run-to-run drift without hi
 // token usage (rate-limit budget) and model context growth on long chats.
 const MAX_HISTORY_TURNS = 8;
 
-const RESPONSE_SCHEMA = zodToJsonSchema(ChatResponseSchema, "ChatResponse").definitions![
+// Two schemas. The ungrounded (Milestone 1) one still forces source:null; the
+// grounded one lets the model emit a chunkId and NOTHING else citation-shaped,
+// so it cannot fabricate a publisher or a year.
+const M1_SCHEMA = zodToJsonSchema(M1ResponseSchema, "ChatResponse").definitions![
   "ChatResponse"
 ] as Record<string, unknown>;
+const RAG_SCHEMA = zodToJsonSchema(LlmResponseSchema, "GroundedResponse").definitions![
+  "GroundedResponse"
+] as Record<string, unknown>;
+
+export type Mode = "ungrounded" | "grounded";
 
 export interface ConversationTurn {
   role: "user" | "assistant";
@@ -46,10 +54,21 @@ function retryAfterMs(err: InstanceType<typeof Groq.RateLimitError>): number | n
   return Number.isNaN(dateMs) ? null : Math.max(dateMs - Date.now(), 0);
 }
 
-async function callOnce(history: ConversationTurn[]): Promise<ChatResponse> {
-  const trimmedHistory = history.slice(-MAX_HISTORY_TURNS);
+async function callOnce(
+  history: ConversationTurn[],
+  mode: Mode,
+  systemExtra?: string
+): Promise<any> {
+  // Grounded calls carry retrieved passages, which dominate the token budget,
+  // so history is trimmed harder: retrieval already supplies the grounding that
+  // history was partly serving.
+  const trimmedHistory = history.slice(mode === "grounded" ? -4 : -MAX_HISTORY_TURNS);
+  const basePrompt = mode === "grounded" ? SYSTEM_PROMPT_RAG : SYSTEM_PROMPT;
   const messages = [
-    { role: "system" as const, content: SYSTEM_PROMPT },
+    {
+      role: "system" as const,
+      content: systemExtra ? `${basePrompt}\n\n${systemExtra}` : basePrompt,
+    },
     ...trimmedHistory.map((turn) => ({ role: turn.role, content: turn.content })),
   ];
 
@@ -78,7 +97,7 @@ async function callOnce(history: ConversationTurn[]): Promise<ChatResponse> {
           type: "json_schema",
           json_schema: {
             name: "chat_response",
-            schema: RESPONSE_SCHEMA,
+            schema: mode === "grounded" ? RAG_SCHEMA : M1_SCHEMA,
             strict: true,
           },
         },
@@ -96,7 +115,8 @@ async function callOnce(history: ConversationTurn[]): Promise<ChatResponse> {
         throw new SchemaValidationError("Response content was not valid JSON");
       }
 
-      const parsed = ChatResponseSchema.safeParse(parsedArgs);
+      const schema = mode === "grounded" ? LlmResponseSchema : M1ResponseSchema;
+      const parsed = schema.safeParse(parsedArgs);
       if (!parsed.success) {
         throw new SchemaValidationError(parsed.error.message);
       }
@@ -134,22 +154,55 @@ async function callOnce(history: ConversationTurn[]): Promise<ChatResponse> {
  */
 export async function generateStructuredAnswer(
   history: ConversationTurn[]
-): Promise<ChatResponse> {
+): Promise<{ answer: string; claims: { text: string; source: null }[] }> {
   try {
-    return await callOnce(history);
+    return await callOnce(history, "ungrounded");
   } catch (err) {
     if (!(err instanceof SchemaValidationError)) throw err;
+    return await callOnce(
+      [
+        ...history,
+        {
+          role: "user",
+          content:
+            "Your previous response did not match the required schema. Respond again " +
+            "with valid JSON: `answer` (string) and `claims` (array of { text, source: null }).",
+        },
+      ],
+      "ungrounded"
+    );
+  }
+}
 
-    const retryHistory: ConversationTurn[] = [
-      ...history,
-      {
-        role: "user",
-        content:
-          "Your previous response did not match the required schema. " +
-          "Respond again with valid JSON matching the schema: `answer` (string) and `claims` " +
-          "(array of { text: string, source: null }) fields.",
-      },
-    ];
-    return await callOnce(retryHistory);
+/**
+ * Grounded generation: the model sees ONLY the supplied passages and may cite
+ * them by chunkId. It cannot emit a publisher or a year, so a fabricated
+ * citation is not expressible in the schema it is held to.
+ */
+export async function generateGroundedAnswer(
+  history: ConversationTurn[],
+  passages: string
+): Promise<LlmResponse> {
+  const systemExtra = `REFERENCE PASSAGES — the only material you may answer from:
+
+${passages}`;
+  try {
+    return await callOnce(history, "grounded", systemExtra);
+  } catch (err) {
+    if (!(err instanceof SchemaValidationError)) throw err;
+    return await callOnce(
+      [
+        ...history,
+        {
+          role: "user",
+          content:
+            "Your previous response did not match the required schema. Respond again " +
+            "with valid JSON: `answer` (string) and `claims` (array of { text, chunkId }), " +
+            "where every chunkId is copied exactly from a supplied passage.",
+        },
+      ],
+      "grounded",
+      systemExtra
+    );
   }
 }

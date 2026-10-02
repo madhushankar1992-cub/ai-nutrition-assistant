@@ -31,7 +31,13 @@ model Claim {
   messageId String
   message   Message @relation(fields: [messageId], references: [id])
   text      String
-  source    String? // always null in Milestone 1; populated in Milestone 2
+  // JSON-encoded Citation (document, publisher, year, url, section, page).
+  // Null only on refusal paths, which carry no claims.
+  source    String?
+  // The retrieved chunk this claim was bound to. Referential integrity IS the
+  // no-fabrication guarantee at the storage layer: a claim cannot persist a
+  // citation to a chunk that does not exist.
+  chunkId   String?
 }
 
 model EvalRun {
