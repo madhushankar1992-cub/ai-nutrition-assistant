@@ -1,7 +1,7 @@
 # Retrieval Evaluation Report
 
-Config `932717403c` · k=5 · Xenova/bge-small-en-v1.5
-Chunking 500/900/80 · generated 2026-10-02T21:17:03.317Z
+Config `eb19ae61e7` · k=5 · Xenova/bge-small-en-v1.5
+Chunking 500/900/80 · generated 2026-10-02T21:39:57.444Z
 
 ## Headline
 
@@ -22,23 +22,23 @@ embedding one.
 
 | ID | Chunk hit | Rank | Doc hit | Docs in top-k | Top score |
 |---|---|---|---|---|---|
-| rq01-fsa-leftovers | yes | 1 | yes | 1 | 0.799 |
-| rq02-fsa-fridge-temp | yes | 2 | yes | 1 | 0.717 |
-| rq03-fsa-freezer-temp | yes | 2 | yes | 1 | 0.695 |
-| rq04-fsa-cooling-time | yes | 1 | yes | 1 | 0.762 |
-| rq05-fsa-defrost | yes | 1 | yes | 1 | 0.688 |
-| rq06-who-fruit-veg | yes | 1 | yes | 3 | 0.674 |
-| rq07-who-free-sugars | yes | 1 | yes | 2 | 0.650 |
-| rq08-who-salt | yes | 1 | yes | 2 | 0.719 |
-| rq09-who-sodium | yes | 1 | yes | 3 | 0.730 |
-| rq10-who-five-keys | yes | 1 | yes | 3 | 0.887 |
-| rq11-eatwell-saturated-fat | yes | 1 | yes | 3 | 0.614 |
+| rq01-fsa-leftovers | yes | 1 | yes | 1 | 0.795 |
+| rq02-fsa-fridge-temp | yes | 2 | yes | 1 | 0.723 |
+| rq03-fsa-freezer-temp | yes | 2 | yes | 1 | 0.701 |
+| rq04-fsa-cooling-time | yes | 1 | yes | 1 | 0.763 |
+| rq05-fsa-defrost | yes | 1 | yes | 1 | 0.685 |
+| rq06-who-fruit-veg | yes | 1 | yes | 3 | 0.677 |
+| rq07-who-free-sugars | yes | 1 | yes | 2 | 0.651 |
+| rq08-who-salt | yes | 1 | yes | 2 | 0.718 |
+| rq09-who-sodium | yes | 1 | yes | 3 | 0.729 |
+| rq10-who-five-keys | yes | 1 | yes | 3 | 0.889 |
+| rq11-eatwell-saturated-fat | yes | 1 | yes | 3 | 0.619 |
 | rq12-eatwell-five-a-day | yes | 1 | yes | 2 | 0.720 |
-| rq13-dga-sodium | yes | 5 | yes | 3 | 0.691 |
-| rq14-dga-protein-foods | yes | 1 | yes | 2 | 0.602 |
-| rq15-efsa-fibre | yes | 1 | yes | 1 | 0.690 |
-| rq16-efsa-vitamin-c | yes | 4 | yes | 1 | 0.732 |
-| rq17-crossdoc-salt | yes | 1 | yes | 2 | 0.769 |
+| rq13-dga-sodium | yes | 5 | yes | 3 | 0.695 |
+| rq14-dga-protein-foods | yes | 1 | yes | 2 | 0.607 |
+| rq15-efsa-fibre | yes | 1 | yes | 1 | 0.686 |
+| rq16-efsa-vitamin-c | yes | 5 | yes | 1 | 0.764 |
+| rq17-crossdoc-salt | yes | 1 | yes | 2 | 0.774 |
 
 ## Adversarial suite
 
@@ -64,11 +64,14 @@ a retrieval bug and its automated check would share the failure.
 
 ### How long can I keep cooked leftovers in the fridge?
 
-> Cooked leftovers should be eaten within 48 hours (two days) of being placed in the fridge, or frozen if they won’t be consumed within that time.
+> Cooked leftovers should be eaten within two days (48 hours) of being placed in the fridge.
 
 - **Claim:** Eat leftovers within 48 hours or freeze them if you think this won’t be possible.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
   - **Passage:** then has to work harder to lower the temperature. Don’t place hot or warm food in your fridge. Instead, cool cooked food at room temperature and place in the fridge within one to two hours. To cool food quickly, divide food into smaller portions in containers or freezer bags before putting in the f…
+- **Claim:** eat leftovers within two days or freeze if you think this won’t be possible
+  - **Cited:** Food Standards Agency 2017 §Applies to England, Northern Ireland and Wales
+  - **Passage:** is available at https://www.gov.uk/government/publications/how-to-chill-freeze-and-defrost-food-safely/how-to-chill-freeze-and-defrost-food-safely Chilling, freezing and defrosting food properly helps stop harmful bacteria from growing. Here are our top recommendations on chilling and freezing you…
 
 ### What temperature should a domestic fridge be set to?
 
@@ -77,15 +80,12 @@ a retrieval bug and its automated check would share the failure.
 - **Claim:** Your fridge should be set between 0 and 5°C.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
   - **Passage:** Your fridge should be set between 0 and 5°C. Using a fridge thermometer is the best way to do this and we would recommend checking once a week. To make sure your fridge is running safely you can use the built-in dial or gauge inside the fridge to change the power setting. Check the manufacturer’s i…
-- **Claim:** your fridge should be between 0 and 5°C
-  - **Cited:** Food Standards Agency 2017 §Applies to England, Northern Ireland and Wales
-  - **Passage:** is available at https://www.gov.uk/government/publications/how-to-chill-freeze-and-defrost-food-safely/how-to-chill-freeze-and-defrost-food-safely Chilling, freezing and defrosting food properly helps stop harmful bacteria from growing. Here are our top recommendations on chilling and freezing you…
 
 ### What temperature should a freezer be kept at?
 
-> The guidance recommends keeping a domestic freezer at about ‑18 °C.
+> The guidance recommends keeping a domestic freezer at about –18 °C.
 
-- **Claim:** your freezer should be around -18°C
+- **Claim:** Your freezer should be around -18°C
   - **Cited:** Food Standards Agency 2017 §2. Freezing Food
   - **Passage:** A freezer acts as a pause button - food in a freezer won’t go bad and most bacteria cannot grow in it. It’s OK to freeze most foods as long as you check packet instructions to ensure that foods are suitable for freezing. Here’s our top tips on freezing your food safely: your freezer should be arou…
 - **Claim:** The cold temperatures of a domestic freezer (-18°C) delay chemical reactions within foods
@@ -94,7 +94,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How quickly should cooked food be put in the fridge after cooking?
 
-> Cooked food should be cooled at room temperature and placed in the refrigerator within one to two hours after cooking.
+> Cooked food should be cooled at room temperature and placed in the fridge within one to two hours after cooking.
 
 - **Claim:** Don’t place hot or warm food in your fridge. Instead, cool cooked food at room temperature and place in the fridge within one to two hours.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
@@ -105,7 +105,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How long can defrosted food be kept before using it?
 
-> Defrosted food should be used within 24 hours after it has been fully thawed.
+> Defrosted food should be used within 24 hours after it has been fully thawed.
 
 - **Claim:** It’s also important to use food within 24 hours after it’s been fully defrosted – it will go bad in the same way as if it were fresh.
   - **Cited:** Food Standards Agency 2017 §3. Defrosting Food
@@ -113,7 +113,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How many grams of fruit and vegetables should be eaten each day?
 
-> Guidance recommends that people older than 10 years aim for at least 400 g of fruit and vegetables each day. Children 2–5 years should aim for at least 250 g, and children 6–9 years should aim for at least 350 g per day.
+> Guidance says that people older than 10 years should aim for at least 400 g of fruit and vegetables each day. Children 2–5 years should aim for at least 250 g, and children 6–9 years should aim for at least 350 g per day.
 
 - **Claim:** Everyone older than 10 years of age should aim for at least 400 grams of fruits and vegetables per day, with lesser amounts for children under 10: at least 250 or 350 grams for children 2–5 or 6–9 years of age, respectively.
   - **Cited:** World Health Organization 2026 §WHO guidance on healthy diets
@@ -124,15 +124,15 @@ a retrieval bug and its automated check would share the failure.
 
 ### What proportion of energy should come from free sugars?
 
-> Guidance recommends that free sugars provide less than 10% of total daily energy intake (with an optional lower target of 5% for additional health benefits).
+> Guidance states that free sugars should provide less than 10% of total daily energy intake, with an optional lower target of 5% for additional health benefits.
 
-- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g for a person of healthy body weight consuming about 2000 calories per day. Limiting further to 5% or less of total daily energy intake may provide additional health benefits.
+- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, ... Limiting further to 5% or less of total daily energy intake may provide additional health benefits.
   - **Cited:** World Health Organization 2026 §Sugars
   - **Passage:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g (or about 12 level teaspoons) for a person of healthy body weight consuming about 2000 calories per day. Limiting further to 5% or less of total daily energy intake may provide…
 
 ### What is the recommended daily limit for salt intake?
 
-> Guidance on adult salt intake varies: the WHO fact sheet advises limiting salt to less than 5 grams per day, while Public Health England’s Eatwell Guide states adults should consume no more than 6 grams per day.
+> Guidance on adult salt intake varies: one source recommends limiting intake to less than 5 grams of salt per day, while another advises no more than 6 grams per day.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium
@@ -143,7 +143,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### What does WHO recommend as a sodium limit for adults?
 
-> The World Health Organization recommends that adults limit salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium per day.
+> The World Health Organization recommends that adults limit salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium

@@ -24,6 +24,11 @@ export const RETRIEVAL_CONFIG = {
 
   // Embedding — local ONNX, not a hosted API. Groq has no embeddings endpoint.
   embeddingModel: "Xenova/bge-small-en-v1.5",
+  // Weight precision is part of the identity of an embedding: int8 and fp32
+  // vectors of the same text are not the same vector. Including it here means
+  // changing it marks every existing chunk stale instead of silently mixing
+  // two quantisations in one index.
+  embeddingDtype: "q8",
   embeddingDimensions: 384,
 
   // Index

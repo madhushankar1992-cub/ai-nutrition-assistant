@@ -7,6 +7,7 @@ import { formatPassages, retrieve } from "@/lib/retrieval";
 import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
+import { resolveOwner, type OwnerResult } from "@/lib/session";
 
 // Groq calls retry with backoff on rate limits, and a grounded request also
 // embeds the query and hits the vector store first. Hobby plan max is 60s.
@@ -25,16 +26,32 @@ const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace(/\/$/, "");
 
 async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResponse> {
   const target = `${BACKEND_API_URL}/api/chat${req.nextUrl.search}`;
+  const cookie = req.headers.get("cookie");
+
   const upstream = await fetch(target, {
     method: req.method,
-    headers: { "Content-Type": "application/json" },
+    // The owner cookie has to survive the hop in both directions, or the
+    // backend mints a new owner on every request and no conversation is ever
+    // readable twice.
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookie ? { cookie } : {}),
+    },
     body,
   });
+
   const text = await upstream.text();
-  return new NextResponse(text, {
-    status: upstream.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  const headers = new Headers({ "Content-Type": "application/json" });
+  const setCookie = upstream.headers.get("set-cookie");
+  if (setCookie) headers.set("set-cookie", setCookie);
+
+  return new NextResponse(text, { status: upstream.status, headers });
+}
+
+/** Attach Set-Cookie when a new owner id was minted for this request. */
+function withOwnerCookie(res: NextResponse, owner: OwnerResult): NextResponse {
+  if (owner.setCookie) res.headers.set("set-cookie", owner.setCookie);
+  return res;
 }
 
 async function logFailure(category: string, detail: string) {
@@ -70,11 +87,38 @@ export async function POST(req: NextRequest) {
   const { message, documentKey } = parsedRequest.data;
   let { conversationId } = parsedRequest.data;
 
-  // 1. Load or create the conversation. History is keyed by conversationId, so
-  // separate chat threads can never see each other's turns.
+  // 1. Establish who is asking, then load or create the conversation. History
+  // is keyed by conversationId, so separate chat threads can never see each
+  // other's turns — and ownership means another browser cannot read this one
+  // by presenting its id.
+  const owner = resolveOwner(req.headers.get("cookie"));
+
   if (!conversationId) {
-    conversationId = (await prisma.conversation.create({ data: {} })).id;
+    conversationId = (await prisma.conversation.create({ data: { ownerId: owner.ownerId } })).id;
+  } else {
+    const existing = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true, ownerId: true },
+    });
+
+    if (!existing) {
+      // An unknown id is treated as a new conversation rather than an error:
+      // the client may be holding an id from a cleared database.
+      conversationId = (await prisma.conversation.create({ data: { ownerId: owner.ownerId } })).id;
+    } else if (existing.ownerId === null) {
+      // Predates ownership — claimed by the first browser to open it.
+      await prisma.conversation.update({
+        where: { id: conversationId },
+        data: { ownerId: owner.ownerId },
+      });
+    } else if (existing.ownerId !== owner.ownerId) {
+      return withOwnerCookie(
+        NextResponse.json({ error: "Not found" }, { status: 404 }),
+        owner
+      );
+    }
   }
+
   const priorMessages = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: "asc" },
@@ -101,7 +145,10 @@ export async function POST(req: NextRequest) {
     await prisma.message.create({
       data: { conversationId, role: "assistant", content: REFUSAL_MESSAGE },
     });
-    return NextResponse.json({ conversationId, answer: REFUSAL_MESSAGE, claims: [] });
+    return withOwnerCookie(
+      NextResponse.json({ conversationId, answer: REFUSAL_MESSAGE, claims: [] }),
+      owner
+    );
   }
 
   // 3. Retrieve. Embedding failure is a HARD failure: there is deliberately no
@@ -114,7 +161,10 @@ export async function POST(req: NextRequest) {
     await logFailure("retrieval_failed", err instanceof Error ? err.message : String(err));
     const msg = "I can't reach my reference library right now, so I can't answer from the guidance. Please try again shortly.";
     await prisma.message.create({ data: { conversationId, role: "assistant", content: msg } });
-    return NextResponse.json({ conversationId, answer: msg, claims: [] }, { status: 503 });
+    return withOwnerCookie(
+      NextResponse.json({ conversationId, answer: msg, claims: [] }, { status: 503 }),
+      owner
+    );
   }
 
   // 4. Sufficiency gate — refuse BEFORE the model is asked to write from thin
@@ -124,7 +174,8 @@ export async function POST(req: NextRequest) {
     const answer = notInCorpusMessage(retrieval.documentsSearched);
     await logFailure("not_in_corpus", `${retrieval.reason} — query="${message.slice(0, 120)}"`);
     await prisma.message.create({ data: { conversationId, role: "assistant", content: answer } });
-    return NextResponse.json({
+    return withOwnerCookie(
+      NextResponse.json({
       conversationId,
       answer,
       claims: [],
@@ -137,7 +188,9 @@ export async function POST(req: NextRequest) {
         chunks: [],
         configVersion: RETRIEVAL_CONFIG_HASH,
       },
-    });
+    }),
+      owner
+    );
   }
 
   // 5. Generate from the retrieved passages only.
@@ -153,7 +206,10 @@ export async function POST(req: NextRequest) {
     await logFailure("invalid_schema", err instanceof Error ? err.message : String(err));
     const fallback = "Sorry, something went wrong generating a response. Please try again.";
     await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
-    return NextResponse.json({ conversationId, answer: fallback, claims: [] }, { status: 422 });
+    return withOwnerCookie(
+      NextResponse.json({ conversationId, answer: fallback, claims: [] }, { status: 422 }),
+      owner
+    );
   }
 
   // 6. Bind citations. A claim whose chunkId was not retrieved for THIS request
@@ -196,7 +252,8 @@ export async function POST(req: NextRequest) {
 
   // 9. Respond. The envelope is unchanged from Milestone 1; `retrieval` is added
   // alongside, so a Milestone 1 client keeps working and simply ignores it.
-  return NextResponse.json({
+  return withOwnerCookie(
+    NextResponse.json({
     conversationId,
     answer,
     claims,
@@ -220,7 +277,9 @@ export async function POST(req: NextRequest) {
       })),
       configVersion: RETRIEVAL_CONFIG_HASH,
     },
-  });
+  }),
+    owner
+  );
 }
 
 /**
@@ -277,6 +336,18 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
   }
 
+  // Deleting someone else's conversation must not be possible either. A
+  // mismatch answers 404 rather than 403, so the endpoint does not confirm
+  // that an id exists to anyone who is not its owner.
+  const owner = resolveOwner(req.headers.get("cookie"));
+  const existing = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { ownerId: true },
+  });
+  if (!existing || (existing.ownerId !== null && existing.ownerId !== owner.ownerId)) {
+    return withOwnerCookie(NextResponse.json({ error: "Not found" }, { status: 404 }), owner);
+  }
+
   const messages = await prisma.message.findMany({
     where: { conversationId },
     select: { id: true },
@@ -287,5 +358,5 @@ export async function DELETE(req: NextRequest) {
   await prisma.message.deleteMany({ where: { conversationId } });
   await prisma.conversation.deleteMany({ where: { id: conversationId } });
 
-  return NextResponse.json({ deleted: true, conversationId });
+  return withOwnerCookie(NextResponse.json({ deleted: true, conversationId }), owner);
 }

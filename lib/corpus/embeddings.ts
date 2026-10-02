@@ -9,8 +9,23 @@
 //   - Query embedding stays in-process, so the request path never waits on a
 //     third party that can rate-limit or go down mid-conversation.
 //
-// Cost: the ONNX weights (~130 MB) download on first use and are cached. In CI
-// that cache is warmed by actions/cache; see .github/workflows.
+// Cost: the ONNX weights download on first use and are cached. In CI that cache
+// is warmed by actions/cache; see .github/workflows.
+//
+// RUNNING IN A SERVERLESS FUNCTION. Two things make this work on Vercel, and
+// both were failures before:
+//   1. dtype "q8", not "fp32". The fp32 weights are ~127 MB; the int8-quantised
+//      ones are ~33 MB. Size is what put the model outside a serverless
+//      function's reach, and quantisation is what brings it back in.
+//   2. A writable cache directory. The library caches weights next to the
+//      module by default, and a serverless filesystem is read-only everywhere
+//      except the temp directory — so the download succeeded and the write
+//      failed, on every cold start.
+//
+// Quantisation is not free: int8 vectors differ slightly from fp32 ones. That
+// matters only if the two sides disagree, so the CORPUS IS EMBEDDED WITH THE
+// SAME dtype — change this and the whole corpus must be re-embedded, or queries
+// and passages are measured with different rulers.
 //
 // IMPORTANT — bge models are asymmetric. A passage is embedded as-is, but a
 // QUERY must carry the instruction prefix below or retrieval quality drops
@@ -20,6 +35,14 @@ import type { FeatureExtractionPipeline } from "@huggingface/transformers";
 
 export const EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
 export const EMBEDDING_DIMENSIONS = 384;
+
+/**
+ * Weight precision. Queries and passages MUST use the same value — see the
+ * note above. It is part of `RETRIEVAL_CONFIG`, so changing it changes
+ * `configHash` and marks every existing chunk stale rather than silently
+ * mixing two quantisations in one index.
+ */
+export const EMBEDDING_DTYPE = "q8" as const;
 
 /** Prefix prescribed by the bge authors for short query -> long passage retrieval. */
 export const QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: ";
@@ -36,9 +59,19 @@ const globalForEmbed = globalThis as unknown as { bgePipeline?: Promise<Pipe> };
 async function getPipeline(): Promise<Pipe> {
   if (!globalForEmbed.bgePipeline) {
     globalForEmbed.bgePipeline = (async () => {
-      const { pipeline } = await import("@huggingface/transformers");
+      const { pipeline, env } = await import("@huggingface/transformers");
+
+      // Only the temp directory is writable in a serverless function. Left at
+      // its default, the weights download and then fail to cache, on every
+      // cold start.
+      if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+        const os = await import("node:os");
+        const path = await import("node:path");
+        env.cacheDir = path.join(os.tmpdir(), "hf-cache");
+      }
+
       return (await pipeline("feature-extraction", EMBEDDING_MODEL, {
-        dtype: "fp32",
+        dtype: EMBEDDING_DTYPE,
       })) as Pipe;
     })();
   }

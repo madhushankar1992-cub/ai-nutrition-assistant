@@ -13,7 +13,14 @@ datasource db {
 model Conversation {
   id        String    @id @default(uuid())
   createdAt DateTime  @default(now())
+  /// Opaque per-browser id from the signed `nk_owner` cookie (lib/session.ts).
+  /// Not a user account. Nullable because conversations created before
+  /// ownership existed have none; those are claimed by the first browser to
+  /// open them, which is the only migration that does not destroy history.
+  ownerId   String?
   messages  Message[]
+
+  @@index([ownerId])
 }
 
 model Message {
