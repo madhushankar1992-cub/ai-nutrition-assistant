@@ -1,0 +1,128 @@
+name: Corpus ingest
+
+# Daily pipeline: scrape -> chunk -> embed -> upload to Chroma Cloud.
+#
+# SCHEDULE: GitHub Actions cron is always UTC and has no timezone option.
+#   03:45 UTC  ==  09:15 IST (UTC+05:30)   <- the requested 9:15 AM, India time
+# GitHub also delays scheduled runs when the platform is busy, so treat this as
+# "shortly after 9:15", not exact. Nothing in the pipeline is minute-sensitive.
+#
+# ORDER MATTERS and is enforced by the job steps below:
+#   1. watch   - fetch every source, verify it is still the registered edition
+#   2. ingest  - chunk, embed locally with bge-small-en-v1.5, upsert to Chroma
+#
+# The ingest step ABORTS a document whose title or year no longer matches the
+# registry. That is the point: silently re-ingesting a new edition would leave
+# already-published citations pointing at text that no longer supports them.
+
+on:
+  schedule:
+    - cron: "45 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run everything except the Chroma Cloud upload"
+        type: boolean
+        default: false
+      source:
+        description: "Ingest a single source key (blank = all)"
+        type: string
+        required: false
+
+concurrency:
+  group: corpus-ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ingest:
+    name: Scrape, chunk, embed, upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
+      CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
+      CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
+      CHROMA_COLLECTION: ${{ vars.CHROMA_COLLECTION || 'nutrition-guidance' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # The bge ONNX weights are ~130 MB. Without this cache every scheduled run
+      # re-downloads them from HuggingFace, which is slow and rude.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            node_modules/@huggingface/transformers/.cache
+          key: bge-small-en-v1.5-${{ runner.os }}
+          restore-keys: bge-small-en-v1.5-
+
+      # --- Step 1: scrape and verify -------------------------------------
+      - name: Watch corpus sources
+        id: watch
+        continue-on-error: true
+        run: npm run corpus:watch -- --trigger=schedule
+
+      - name: Upload watch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-watch-report
+          path: Docs/corpus-watch-report.md
+          if-no-files-found: ignore
+          retention-days: 90
+
+      # --- Step 2: chunk, embed, upload ----------------------------------
+      # Runs even when the watcher flagged a change, because ingest has its own
+      # edition guard and will abort per-document rather than per-run.
+      - name: Ingest to Chroma Cloud
+        id: ingest
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ -n "${{ inputs.source }}" ]; then ARGS="$ARGS --source=${{ inputs.source }}"; fi
+          npm run ingest -- $ARGS
+
+      - name: Report a source that needs review
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'The daily corpus ingest failed. Check the workflow logs.';
+            try { body = fs.readFileSync('Docs/corpus-watch-report.md', 'utf8'); } catch (e) {}
+            const run = `\n\n---\n[Workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'corpus-watch',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number, body: body + run,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: 'Corpus ingest needs review', body: body + run,
+                labels: ['corpus-watch'],
+              });
+            }

@@ -2,7 +2,7 @@
 
 **Live:** [Vercel](https://ai-nutrition-assistant-self.vercel.app) · [Railway](https://app-production-3fe4f.up.railway.app) — both share the same Railway-hosted Postgres database.
 
-See [Docs/problemStatement.md](Docs/problemStatement.md) for the requirements and [Docs/architecture.md](Docs/architecture.md) for the technical design.
+See [Docs/problemStatement.md](Docs/problemStatement.md) for the requirements and [Docs/rag-architecture.md](Docs/rag-architecture.md) for the technical design.
 
 ## Setup
 

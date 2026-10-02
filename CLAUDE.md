@@ -61,4 +61,4 @@ Single Next.js 14 App Router app — one codebase serves both the frontend and t
 
 **System prompt** (`lib/systemPrompt.ts`): exports `SYSTEM_PROMPT`, a single template string defining the assistant's persona ("Sage"), answer style (concise, ~150 words, no padding/hedging, answer only what was asked — added specifically so repeated identical questions get comparable answers across the 3x eval runs), the claims-decomposition instruction, and the same out-of-scope categories as the code-level `scopeGuard` (defense in depth — the prompt is not relied on alone).
 
-See `Docs/architecture.md` for the full as-built design (this supersedes the original pre-build plan where the two diverge) and `Docs/deployment-plan.md` for deployment specifics.
+See `Docs/rag-architecture.md` for the full as-built design (this supersedes the original pre-build plan where the two diverge) and `Docs/deployment-plan.md` for deployment specifics.

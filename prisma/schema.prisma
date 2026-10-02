@@ -44,6 +44,70 @@ model EvalRun {
   claimsJson    String // JSON-encoded array of { text, source }; kept as String (not Json) to avoid touching working eval code
 }
 
+// --- Corpus watcher (Milestone 2 groundwork) -------------------------------
+// Additive only: nothing above is altered, so one deploy target can still run
+// Milestone 1 code against this schema while the other runs new code.
+// See Docs/rag-architecture.md §27 for why that matters here.
+
+model CorpusSource {
+  key         String           @id // stable registry key from lib/corpus/sources.ts
+  name        String
+  publisher   String
+  year        Int
+  edition     String?
+  url         String // reader-facing; what a citation links to
+  fileUrl     String // what the watcher fetches; differs when a landing page blocks bots
+  acquisition String // "fetched" | "manual"
+  enabled     Boolean          @default(true)
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  snapshots   CorpusSnapshot[]
+}
+
+model CorpusSnapshot {
+  id             String       @id @default(uuid())
+  sourceKey      String
+  source         CorpusSource @relation(fields: [sourceKey], references: [key])
+  runId          String?
+  run            ScrapeRun?   @relation(fields: [runId], references: [id])
+  checkedAt      DateTime     @default(now())
+  verdict        String // first_seen | unchanged | changed | edition_mismatch |
+  //                      quality_drop | needs_manual_refresh | unreachable | error
+  detail         String
+  httpStatus     Int?
+  contentType    String?
+  finalUrl       String?
+  byteLength     Int?
+  checksum       String? // sha256 of the body; null when nothing was downloaded
+  etag           String? // replayed as If-None-Match so an unchanged PDF costs a 304
+  lastModified   String?
+  pageCount      Int?
+  wordCount      Int?
+  wordsPerPage   Int?
+  lowTextPages   String? // JSON array — pages too sparse to be prose (covers, scans)
+  artworkPages   String? // JSON array — many words, no sentences, few digits (diagrams)
+  tablePages     String? // JSON array — many words, no sentences, many digits (data tables)
+  extractedTitle String?
+  extractedYears String? // JSON array — cross-checked against expectYearIn
+
+  @@index([sourceKey, checkedAt])
+}
+
+model ScrapeRun {
+  id             String           @id @default(uuid())
+  startedAt      DateTime         @default(now())
+  finishedAt     DateTime?
+  trigger        String // "schedule" | "manual" | "api"
+  sourcesChecked Int              @default(0)
+  changed        Int              @default(0)
+  blocked        Int              @default(0)
+  failed         Int              @default(0)
+  ok             Boolean          @default(false)
+  summary        String?
+  snapshots      CorpusSnapshot[]
+}
+
 model FailureLogEntry {
   id         String   @id @default(uuid())
   evalRunId  String?

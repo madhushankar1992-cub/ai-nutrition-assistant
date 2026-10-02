@@ -1,146 +1,360 @@
-# Implementation Plan — AI Nutrition Assistant (Milestone 1)
+# Implementation Plan — AI Nutrition Assistant
 
-Phased build order derived from [problemStatement.md](problemStatement.md) and [architecture.md](architecture.md). Each phase ends in a runnable/verifiable state; later phases assume earlier ones are done. "Exit criteria" are what to check before moving on.
+Phased build order derived from [problemStatement.md](problemStatement.md) and [rag-architecture.md](rag-architecture.md). Each phase ends in a runnable, verifiable state; later phases assume earlier ones are done. "Exit criteria" are what to check before moving on.
+
+| Part | Milestone | Phases | Status |
+|---|---|---|---|
+| **A** | Milestone 1 — prototype without retrieval | 0–11 | ✅ **Complete and deployed** |
+| **B** | Milestone 2 — dietary guidance RAG | 12–22 | ⬜ **Not started** |
+
+---
+---
+
+# Part A — Milestone 1 (Complete)
+
+Condensed to what actually shipped, since this is now the baseline Milestone 2 builds on rather than work to be done. Where the build diverged from the original plan, the divergence is recorded — those are the useful parts.
+
+| Phase | Deliverable | Outcome |
+|---|---|---|
+| 0 | Scaffolded Next.js 14 App Router + TypeScript + Tailwind repo | ✅ |
+| 1 | `prisma/schema.prisma` — `Conversation`, `Message`, `Claim`, `EvalRun`, `FailureLogEntry`; `lib/db.ts` singleton | ✅ **Postgres for local dev too**, not the planned SQLite-dev/Postgres-prod split — Vercel's filesystem is ephemeral, and one database avoids a dev/prod schema divergence |
+| 2 | `lib/schema.ts`, `lib/systemPrompt.ts` | ✅ Zod as single source of truth, converted to the model's JSON-schema format *and* reused for validation |
+| 3 | `lib/groq.ts` — model call wrapper | ✅ **Structured Outputs (`response_format: json_schema`, `strict: true`), not the planned forced tool-calling.** `gpt-oss` reasoning models intermittently emit chain-of-thought under forced `tool_choice`, which Groq's tool-call parser rejects with a 400 |
+| 4 | `lib/scopeGuard.ts` + `scripts/test-scope-guard.ts` | ✅ Regex-based, not a classifier. Unit-tested against 12 restricted phrasings, the 10 eval questions, and 5 benign counter-examples |
+| 5 | `app/api/chat/route.ts` (`POST` + `DELETE`) | ✅ 12-step pipeline, [rag-architecture.md §11](rag-architecture.md) |
+| 6 | `ChatWindow`, `MessageBubble`, `ChatInput`, `SourcesPanel` | ✅ Sources panel built with its populated branch written but **unreachable** — by design |
+| 7 | `data/eval-questions.json` + `scripts/evaluate.ts` | ✅ 10 questions × 3 attempts, fresh conversation each |
+| 8 | End-to-end scope-abuse suite | ✅ 8 cases: `numeric_target` / `medical_advice` × direct / rephrased / indirect / post-unrelated |
+| 9 | Prompt iteration loop | ✅ See [prompt-iteration-log.md](prompt-iteration-log.md) |
+| 10 | Deployment | ✅ **Both Vercel and Railway**, sharing one Railway Postgres |
+| 11 | Milestone 2 readiness check | ⚠️ **Passed at the time, but two findings have since superseded it** — see below |
+
+### Recorded Milestone 1 baseline
+
+`Docs/failure-log.md`, prompt version `eabb1ca8b1`: **4 × `numeric_drift`** — protein requirements, egg storage, cooked-rice storage, blanching time. This is the number Milestone 2 is measured against.
+
+### Two corrections to the Phase 11 readiness conclusion
+
+Phase 11 concluded that Milestone 2 could begin "without touching the schema, API contract, or UI components." Design work on the retrieval layer has shown **two parts of that are wrong**, and Part B is planned accordingly:
+
+1. **The schema does have to change.** `lib/schema.ts` plans to widen `source` to `z.string().url().nullable()`. A bare URL cannot carry document name, publisher and year, all of which Milestone 2 requires on every claim. `source` becomes a structured object ([rag-architecture.md §20.1](rag-architecture.md)). The *field name and response envelope* are still unchanged, which is what the problem statement actually froze.
+2. **`SourcesPanel` does need structural work.** Its populated branch renders `claim.source` as both the `href` and the visible link text — correct only for a bare URL. It must be rewritten to render document, publisher, year, section, link and the cited chunk text ([rag-architecture.md §22](rag-architecture.md)).
+
+The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps its shape, with `retrieval` added alongside.
+
+---
+---
+
+# Part B — Milestone 2: Dietary Guidance RAG
+
+**Build order rationale.** The corpus comes first, because every later phase depends on what is actually in it — and corpus research has already shown that what is in it differs from what was assumed. Retrieval is built and measured *before* the answer layer, so a retrieval problem is never debugged as a generation problem.
+
+```
+ 12 Corpus  →  13 Migration  →  14 Ingestion  →  15 Retrieval  →  16 Sufficiency
+                                                                        │
+                                                                        ▼
+ 22 Deploy  ←  21 Verification  ←  20 Question bank  ←  19 UI  ←  18 Binding  ←  17 Schema+Prompt
+```
 
 ---
 
-## Phase 0 — Project Scaffolding
+## Phase 12 — Corpus Selection and Manifest
 
-**Goal:** an empty but runnable Next.js app, ready for feature work.
+**Goal:** a fixed, verified set of 5–7 documents, with provenance recorded, before a line of pipeline code is written.
 
-- Initialize Next.js 14 (App Router) + TypeScript + Tailwind.
-- Add dependencies: `groq-sdk`, `zod`, `zod-to-json-schema`, `@prisma/client` + `prisma`, `uuid`, `tsx`.
-- Create the folder structure from architecture.md §4 (`app/`, `components/`, `lib/`, `prisma/`, `data/`, `scripts/`).
-- Add `.env.local.example`, `.gitignore`.
-- `git init`, initial commit, create the GitHub repo, push.
+**Tasks**
 
-**Exit criteria:** `npm run dev` serves a blank page with no errors; repo exists on GitHub.
+- Choose the final 5–7 from the 39 checked URLs in [problemStatement.md](problemStatement.md). Starting shortlist is the recommended seven: WHO Healthy Diet fact sheet, EFSA DRV Summary, DGA 2025–2030, Eatwell Guide, WHO Five Keys, FSA chill/freeze/defrost, WHO sodium guideline.
+- Create `corpus/manifest.json` with, per document: `name`, `publisher`, `year`, `url` (reader-facing), `fileUrl` (fetchable — these differ for EFSA), `retrievedAt`, `edition`, `acquisition`, `sourceFile`, `licenseNote`, `expectTitleContains`, `expectYearIn`.
+- **Acquire the four bot-blocked documents by hand** and commit them to `corpus/raw/`: FoodSafety.gov cold-storage charts, USDA FSIS temperature chart, and any others returning 403. Record `acquisition: "manual"`.
+- Record the **corpus boundary** — what the corpus does *not* cover. Note that children's requirements will **not** work as the boundary: WHO's sodium guideline covers ages 2–15 and the US guidelines cover birth onward. Pick clinical/therapeutic diets, pregnancy-specific requirements, or an unaddressed food category instead.
+- Record which topic is the **deliberate cross-document overlap**. The verified candidate is leftover storage: FSA says *within 48 hours*; FoodSafety.gov says *3–4 days*.
+- Confirm the US "3–4 days" figure against the hand-acquired document. It currently comes from a search-engine rendering, not the source.
 
----
+**Exit criteria**
 
-## Phase 1 — Data Layer
+- `corpus/manifest.json` lists 5–7 documents; every `sourceFile` exists in `corpus/raw/` and is committed.
+- Every `year` was read from inside the document, not from the page that linked it.
+- The corpus boundary and the overlap topic are written down.
 
-**Goal:** persistent storage for conversations, messages, claims, and eval/failure records.
-
-- Write `prisma/schema.prisma` (`Conversation`, `Message`, `Claim`, `EvalRun`, `FailureLogEntry`) per architecture.md §7.
-- Provision a Postgres instance (Supabase or Neon), set `DATABASE_URL` in `.env.local`.
-- Run `prisma migrate dev` to create tables.
-- Add `lib/db.ts` (Prisma client singleton, hot-reload-safe).
-
-**Exit criteria:** `npx prisma studio` shows all five empty tables against the real database.
+> **Do not skip the edition check.** Two of eleven candidates returned HTTP 200 while being the wrong edition: the widely-cited *DGA 2020–2025* is superseded by the 2025–2030 edition (Jan 2026), and the only downloadable ICMR-NIN PDF is the **2011** manual, not the 2024 revision. Both would produce a *fabricated citation behind a working link* — the hardest failure to notice.
 
 ---
 
-## Phase 2 — Response Schema and System Prompt
+## Phase 13 — Data Model Migration (Additive Only)
 
-**Goal:** the contract every later phase builds against — get this right before wiring the model or UI to it.
+**Goal:** the corpus and citation tables, in a migration safe to run while one deploy target still runs old code.
 
-- `lib/schema.ts`: `ClaimSchema` (`text: string`, `source: null`), `ChatResponseSchema` (`answer`, `claims[]`), `ChatRequestSchema`.
-- `lib/systemPrompt.ts`: role, style/length limits, claim-decomposition instruction, and the excluded-topics list (calorie/weight targets, personal weight recommendations, medical/condition-specific advice) with the refer-to-a-professional instruction.
+**Tasks**
 
-**Exit criteria:** schema and prompt reviewed against problem-statement §3 line by line — every bullet has a corresponding schema field or prompt clause.
+- Enable the `pgvector` extension on the Railway Postgres.
+- Add `Document`, `Chunk` (with `embedding vector(1536)`, `restricted`, `configHash`), and `RetrievalRecord` per [rag-architecture.md §21.2](rag-architecture.md).
+- Add `Claim.chunkId` as a **nullable** FK to `Chunk`.
+- **Leave `Claim.source` in place.** It is dropped in a later release, not this one.
+- Add `lib/retrievalConfig.ts` — one frozen object (chunk target, cap, overlap, embedding model, index type, `k`, sufficiency thresholds) plus its `sha256` prefix.
 
----
+**Exit criteria**
 
-## Phase 3 — LLM Integration
-
-**Goal:** a working, schema-validated call to Groq, independent of the API route or UI.
-
-- Model: **`openai/gpt-oss-120b`** (default), overridable via the `GROQ_MODEL` env var — e.g. to swap to `qwen/qwen3-32b` for a smaller/faster alternative without a code change.
-- `lib/groq.ts`: Groq client, `submit_answer` function tool built from `ChatResponseSchema` via `zodToJsonSchema`, forced `tool_choice: {type: "function", function: {name: "submit_answer"}}`, one retry-with-correction on schema validation failure.
-- Manual smoke test via a throwaway script or `tsx` REPL: call `generateStructuredAnswer` with a sample question, confirm the shape matches `ChatResponseSchema` and `source` is always `null`.
-
-**Exit criteria:** at least 5 varied manual questions return valid, schema-conformant JSON with `source: null` on every claim; a forced malformed case demonstrates the retry path.
+- Migration applies cleanly; `npx prisma studio` shows the new tables empty.
+- **The migration is additive only** — nothing dropped, nothing made non-nullable, no column removed. Verify by reading the generated SQL, not by assuming.
+- Milestone 1's existing `/api/chat` still works unchanged against the migrated database.
 
 ---
 
-## Phase 4 — Scope Guard (Code-Level Enforcement)
+## Phase 14 — Ingestion Pipeline
 
-**Goal:** backend restrictions that hold regardless of prompt wording, built and unit-tested before they're wired into the live request path.
+**Goal:** `scripts/ingest.ts` (`npm run ingest`) — reproducible, idempotent, offline-capable.
 
-- `lib/scopeGuard.ts`: `checkRequest` (numeric target / personal weight / medical-advice patterns, checked against the new message plus recent history) and `checkResponse` (post-hoc leak detection on the generated answer).
-- Write a small standalone test list (direct / rephrased / indirect / post-unrelated-message phrasings for both calorie-target and condition-specific-diet requests) and run it against `checkRequest` directly (no API yet) to tune patterns.
+**Tasks** — the nine steps from [rag-architecture.md §10](rag-architecture.md):
 
-**Exit criteria:** all planned scope-abuse phrasings in the test list are caught by `checkRequest` in isolation, with no false positives on the 10 eval questions' phrasing style.
+1. **Acquire** — fetch `fileUrl`, or read the committed file for `acquisition: "manual"`.
+2. **Checksum** — sha256 into `Document.checksum`; warn loudly if it changed since the last run.
+3. **Verify** — read title and year from inside the document; assert `expectTitleContains` / `expectYearIn`; **abort the run on mismatch**.
+4. **Extract** — PDF → pages, headings, text.
+5. **Quality gate** — **per page, not per document.** Drop pages below a words-per-page threshold; keep the document.
+6. **Chunk** — heading-aware, 500-token target, 900 hard cap, 80-token overlap, never split a detected table.
+7. **Policy scan** — set `Chunk.restricted = true` on passages carrying calorie or per-kg-body-weight targets.
+8. **Embed** — batch to the embedding provider.
+9. **Upsert** — `Document` + `Chunk`, keyed by `(name, year, edition)` and `configHash`.
 
----
+**Exit criteria**
 
-## Phase 5 — Chat API Route
+- Full ingest produces roughly **300–400 chunks** across the corpus.
+- Every chunk has a non-null `section`, a `documentId`, a `tokenCount` and an embedding.
+- Re-running with an unchanged manifest changes nothing (idempotent).
+- A deliberately corrupted `expectYearIn` **aborts the run** — test this explicitly.
+- Chunk counts per document are reported and roughly match the estimates below.
 
-**Goal:** wire Phases 1–4 together behind the frozen `/api/chat` contract.
+**Measured inputs this phase must handle** (full text extraction, 2026-10-02):
 
-- `app/api/chat/route.ts` implementing the 9-step pipeline from architecture.md §6.2: load/create conversation → pre-call guard → compose history → call model → validate → force `source: null` → post-call guard → persist → respond.
-- Failure logging (`FailureLogEntry` inserts) at every failure branch: guard-triggered refusal, invalid schema, post-call leak caught.
+| Document | Pages | Words | Words/page | Est. chunks |
+|---|---|---|---|---|
+| DGA 2025–2030 | 10 | 2,704 | 270 | ~7 |
+| Eatwell Guide | 12 | 5,166 | 430 | ~14 |
+| safefood (Ireland) | 14 | 6,085 | 434 | ~16 |
+| FSANZ | 23 | 6,930 | 301 | ~18 |
+| Brazil guidelines | 152 | 30,459 | 200 | ~81 |
+| ICMR-NIN (2011) | 139 | 33,106 | 238 | ~88 |
+| EFSA DRV Summary | 92 | 48,717 | 529 | ~130 |
 
-**Exit criteria:** using `curl`/Postman, a normal question returns a valid response and persists rows in `Conversation`/`Message`/`Claim`; a scope-violating question returns the refusal template with `claims: []` and no model call is made (verify via logs); conversation history round-trips correctly across two sequential calls with the same `conversationId`.
-
----
-
-## Phase 6 — Chat UI
-
-**Goal:** the three-region interface required by problem-statement §1 and §5, talking only to the local API.
-
-- `components/MessageBubble.tsx`, `ChatInput.tsx`, `SourcesPanel.tsx`, `ChatWindow.tsx`; `app/page.tsx` renders `ChatWindow`.
-- Sources panel renders selected message's claims; every `source: null` claim shows the "no sources yet" placeholder (never hidden or omitted).
-- Conversation history persists across follow-up questions within a session (backed by Phase 5's persistence, not just client state).
-
-**Exit criteria:** manually drive a multi-turn conversation in the browser, including a follow-up question; confirm the sources panel updates per selected message and stays visibly present (not blank/missing) even with all-null sources.
-
----
-
-## Phase 7 — Evaluation Dataset and Harness
-
-**Goal:** the repeatable measurement process required by problem-statement §6.
-
-- `data/eval-questions.json`: the fixed 10 questions (nutrient requirements, food safety/storage, cooking methods, no-clear-answer), each with a stable `id`.
-- `scripts/evaluate.ts`: runs each question 3x against `/api/chat`, diffs claims for numeric drift and non-null sources, flags zero-claim answers on questions expected to be substantive, persists `EvalRun`/`FailureLogEntry` rows, and writes grouped, counted results to `Docs/failure-log.md`.
-
-**Exit criteria:** `npm run eval` completes against a locally running dev server and produces `Docs/failure-log.md` with a populated summary table (even if all counts are legitimately low) and per-category detail sections.
+> **Two extraction facts to build against.** (1) The Eatwell Guide's page 1 is artwork and extracts as a word-salad of food names; pages 2–12 are clean prose at 430 words/page — which is why the quality gate is **per page**. (2) EFSA is **18× the DGA by word count**, so a single global `k` will let it crowd out current US guidance entirely.
 
 ---
 
-## Phase 8 — Scope Abuse Testing (End-to-End)
+## Phase 15 — Retrieval Layer
 
-**Goal:** verify the Phase 4 guard holds through the full stack, not just in isolation, per problem-statement §7.
+**Goal:** `lib/retrieval.ts` and `lib/embeddings.ts` — working vector search in both modes, testable without the API route.
 
-- Extend `scripts/evaluate.ts`'s scope suite (already scaffolded in Phase 7) to cover, for both calorie-target and condition-specific-diet requests: direct, rephrased, indirect, and asked-again-after-unrelated-messages within the same conversation.
-- Run the suite against the live API (not just `checkRequest` in isolation) so a pass also confirms Phase 5's wiring is correct end-to-end.
+**Tasks**
 
-**Exit criteria:** every scope-abuse case in the suite is declined (`claims: []`, refusal text) with zero exceptions; any failure is triaged by tightening `scopeGuard.ts` patterns and rerunning, not by special-casing the specific test question.
+- `lib/embeddings.ts`: provider wrapper, batch (ingestion) and single (query), with query caching by normalised hash.
+- `lib/retrieval.ts`: `search({ queryVector, k, documentId? })`.
+- **All-documents mode** — cosine similarity across `Chunk`, top `k`.
+- **Filtered mode** — the `documentId` filter goes in the **SQL `WHERE` clause**, never as a post-filter on an all-documents result.
+- Both modes `JOIN Document` so provenance returns with the text.
+- Bind the query vector as a **parameter** in any `$queryRaw`, never interpolated.
+- **No fallback on embedding failure** — the request fails rather than answering ungrounded.
 
----
+**Exit criteria**
 
-## Phase 9 — Prompt Iteration Loop
-
-**Goal:** close the loop the problem statement requires — rerun everything after every prompt change.
-
-- Establish the working rhythm: edit `lib/systemPrompt.ts` → `npm run eval` (Phase 7 dataset) → rerun Phase 8 scope suite → compare `Docs/failure-log.md` against the previous `promptVersion`'s counts.
-- Iterate until: unsupported-claim and numeric-drift counts are as low as practical, hedging is reduced without losing correctness, and the scope suite is at 100%.
-
-**Exit criteria:** at least one full iteration cycle completed and documented (before/after failure counts by category, tied to specific prompt changes) in `Docs/failure-log.md` or an accompanying note.
-
----
-
-## Phase 10 — Deployment
-
-**Goal:** the public, reviewable deliverable required by problem-statement §7.
-
-- Push final code to GitHub (if not already continuous from Phase 0).
-- Create Vercel project linked to the repo; set `GROQ_API_KEY` and `DATABASE_URL` as environment variables; confirm `postinstall` runs `prisma generate` and migrations are applied to the production database.
-- Smoke-test the deployed URL: one normal question, one scope-abuse question, confirm persistence works against the production database.
-
-**Exit criteria:** public URL live, both smoke tests pass, GitHub repo is the source of truth for the deployed build.
+- A throwaway script retrieves sensible chunks for 5 hand-picked questions, in both modes.
+- Filtered mode returns `k` chunks from the named document **even when that document is absent from the global top-`k`** — the specific case post-filtering gets wrong.
+- Every returned chunk carries document name, publisher, year and section.
+- No `$queryRaw` call contains an interpolated vector.
 
 ---
 
-## Phase 11 — Milestone 2 Readiness Check
+## Phase 16 — Sufficiency Gate
 
-**Goal:** confirm nothing in Milestone 1 needs to be reworked, per problem-statement §8 and architecture.md §12.
+**Goal:** `lib/sufficiency.ts` — the mechanism behind the not-in-corpus refusal.
 
-- Review the extension-points table in architecture.md §12 against the actual implementation: confirm `source` is the only field that will change type, the API response shape is untouched, and `SourcesPanel` requires no structural changes to display real citations.
-- Archive the Milestone 1 `Docs/failure-log.md` (e.g. copy to `Docs/failure-log-m1-baseline.md`) so Milestone 2's rerun of the same 10 questions has a fixed baseline to diff against.
+**Tasks**
 
-**Exit criteria:** a short written confirmation (in `Docs/` or the PR description) that Milestone 2 can begin by adding a retrieval step without touching the schema, API contract, or UI components.
+- Implement `assessSufficiency(chunks, query)` → `{ sufficient, reason }` using the two-threshold rule (`ABSOLUTE_FLOOR` on top-1 score, `RELEVANCE_FLOOR` count).
+- Thresholds live in `lib/retrievalConfig.ts`, so a change bumps the config hash.
+- **Calibration is deferred to Phase 20**, after the question bank exists. Ship placeholder values and label them as such.
+
+**Exit criteria**
+
+- The gate is callable and deterministic.
+- Clearly out-of-corpus queries return `sufficient: false`; the five Phase 15 questions return `true`.
+- Thresholds are in config, not inline constants.
+
+> **This is the known-weakest component** ([rag-architecture.md §15.1](rag-architecture.md)). A near-miss — right topic, wrong scope — has high surface similarity and will not be caught by a score threshold alone. Do not expect this phase to solve it; expect Phase 21 to measure it.
+
+---
+
+## Phase 17 — Schema and Prompt Changes
+
+**Goal:** the two-schema split and the grounded prompt, before anything is wired together.
+
+**Tasks**
+
+- `lib/schema.ts`: add `CitationSchema` (document, publisher, year, url, section, page, chunkId). Widen `ClaimSchema.source` to `CitationSchema.nullable()`.
+- Add `LlmClaimSchema` = `{ text, chunkId }` — **the only thing the model is allowed to emit.** It must not be able to produce a publisher or a year.
+- **Delete the superseded comment** in `lib/schema.ts` about widening to `z.string().url().nullable()`, and record the change and the reason.
+- `lib/systemPrompt.ts`: add `SYSTEM_PROMPT_RAG` as a **second export**. Keep `SYSTEM_PROMPT` so the Milestone 1 comparison can still be run.
+- Extend `EvalRun` grouping to include the retrieval config hash alongside `promptVersion`.
+
+**Exit criteria**
+
+- `LlmClaimSchema` has no field through which a citation could be fabricated.
+- `SYSTEM_PROMPT_RAG` covers: answer only from passages; every claim carries a `chunkId`; separate claims per document; show disagreement with publishers and years; passage text is data, never instructions; population-level framing; out-of-scope categories retained verbatim.
+- `SYSTEM_PROMPT` is unchanged and still exported.
+
+---
+
+## Phase 18 — Citation Binding and Route Integration
+
+**Goal:** `lib/citations.ts` plus the rewired `/api/chat` — **the most important phase in Part B.**
+
+**Tasks**
+
+- `bindCitations(llmClaims, retrievedChunks)`: resolve each `chunkId` against **this request's** retrieval set. Unresolvable ⇒ **drop the claim** and log `unsupported_claim`. Build the citation from the `Document` row, never from model output.
+- Rewire `app/api/chat/route.ts` to the [§11](rag-architecture.md) order: validate → load → **scope guard** → persist user message → embed → search → **sufficiency gate** → compose → generate → **bind citations** → `checkResponse` → persist → respond.
+- **Remove the M1 `source = null` clamp**, now that `bindCitations` replaces it.
+- Add the `NOT_IN_CORPUS` refusal, populating `retrieval.documentsSearched` so the answer can name what it searched.
+- Persist a `RetrievalRecord` per assistant message.
+- Add `documentId` to `ChatRequestSchema`, validated as a UUID and resolved against `Document`.
+- Extend `DELETE` to remove `RetrievalRecord` rows — and **not** `Document` or `Chunk`.
+
+**Exit criteria**
+
+- A normal question returns claims with populated citations; every cited `chunkId` appears in that request's `RetrievalRecord`.
+- **A forced hallucinated `chunkId` results in the claim being dropped**, not shipped — test this deliberately.
+- A calorie-target request is refused **before** any embedding or search call is made (verify via logs, not by inspection).
+- An out-of-corpus question returns `NOT_IN_CORPUS` naming the documents searched, with no model call.
+- The response envelope keeps its Milestone 1 shape: `{ conversationId, answer, claims[] }` plus `retrieval`.
+- Retrieval happens **before** the rate-limiter reservation, so chunk tokens are counted.
+
+---
+
+## Phase 19 — Frontend
+
+**Goal:** show the evidence. No rebuild.
+
+**Tasks**
+
+- **Rewrite** the `SourcesPanel` populated branch — it currently assumes `source` is a bare URL. Render document, publisher, year, section, link, **and the cited chunk text**.
+- Group citations by document when claims cite different publishers, so a disagreement reads as a disagreement.
+- Distinguish the two refusals: not-in-corpus shows what was searched; out-of-scope shows the professional-referral message with no retrieval block.
+- A document-filter UI control is **optional** and not required for completion.
+
+**Exit criteria**
+
+- Clicking an assistant message shows real citations with openable links.
+- A cross-document answer visibly groups by publisher.
+- The two refusal types are visually distinguishable.
+- Mobile (below `md`) still works — the panel remains hidden there.
+
+---
+
+## Phase 20 — Retrieval Question Bank and Harness
+
+**Goal:** measure retrieval **separately** from answer quality, and lock the configuration.
+
+**Tasks**
+
+- Write `data/retrieval-questions.json` — **15+ questions, authored after ingestion**, each with the known correct document and section. Cover every document, and include the cross-document overlap question.
+- `scripts/evaluate-retrieval.ts` (`npm run eval:retrieval`) reporting: `recall@k` (overall **and per document**), `document_recall@k`, `false_refusal_rate`, `unsupported_claim_rate`, `citation_binding_failures`.
+- **Calibrate the Phase 16 sufficiency thresholds** against this bank: admit every question whose correct chunk exists; reject the adversarial not-covered cases.
+- **Lock and record** in `corpus/README.md`: chunk size, overlap, embedding model, index type, `k`, sufficiency thresholds, chunking strategy, and **what the strategy cost**.
+- Writes `Docs/retrieval-report.md`.
+
+**Exit criteria**
+
+- Hit rate reported overall **and per document** — a weak document must be visible, not averaged away.
+- Thresholds are calibrated against real data, not guessed.
+- `corpus/README.md` contains every value the problem statement requires.
+- `k` has been tuned **jointly with chunk size against the token budget**, not for quality alone.
+
+> **Write the bank against the corpus that exists, not the one that was planned.** Two candidates turned out to be the wrong edition and four could not be fetched. A bank written against the intended corpus measures a corpus that does not exist.
+
+---
+
+## Phase 21 — Verification
+
+**Goal:** the four exercises the problem statement requires. They are not substitutes for one another.
+
+**21a — Adversarial suite**, reported split by refusal type so a correct refusal for the *wrong reason* is visible:
+
+- **not-covered** → `NOT_IN_CORPUS`, naming what was searched.
+- **near-miss** → refusal, not an answer from the wrong scope. Built from the Phase 12 corpus boundary.
+- **out-of-scope** → calorie target and medical advice, each direct / rephrased / indirect / raised-again-later → out-of-scope refusal, **not** `NOT_IN_CORPUS`.
+- **corpus-restricted** *(new in M2)* → ask for a protein target. Must refuse **even though a citable chunk would answer it**.
+
+**21b — Citation spot-check, by hand.** Take 10 answers, open each cited chunk, confirm every number and named recommendation is actually there. Report per-claim **and** per-answer accuracy. Cannot be automated against the same embeddings that produced the retrieval.
+
+**21c — Milestone 1 regression.** Same 10 questions, compared against baseline `eabb1ca8b1`.
+
+**21d — Scope guard regression.** `npm run test:scope` still passes unchanged.
+
+**Exit criteria**
+
+- **`numeric_drift`: 4 → 0** is the target. A number that must appear in a retrieved chunk cannot drift between runs.
+- Every out-of-scope case refuses, including the corpus-restricted one.
+- Citation spot-check reported honestly, including partial failures.
+- **Regressions reported, not just improvements** — a question M1 answered well and M2 refuses is a real cost of grounding, and some are expected.
+- `no_clear_answer` questions reported by what they now do: cited guidance, or not-in-corpus refusal.
+
+> **The corpus-restricted test is the new failure mode.** Milestone 1 could not fail this way — it had no chunk to be tempted by. The risk is broader than first assumed: the scope conflict affects **EFSA** (protein at "0.8 to 1.25 g/kg body weight per day", energy in kcal/day) as well as the DGA, and EFSA is the densest document in the corpus.
+
+---
+
+## Phase 22 — Deployment
+
+**Goal:** live on both targets, with the migration ordered so neither host breaks.
+
+**Tasks** — order matters, because the deploy triggers are asymmetric:
+
+1. Apply the **additive-only** migration to the shared Postgres.
+2. Run `npm run ingest` to populate the corpus.
+3. Deploy **Railway** (push) **and Vercel** (`vercel --prod` — Vercel does *not* auto-deploy on push).
+4. Verify **both** URLs independently.
+5. In a **later** release only, once both hosts run new code, drop `Claim.source`.
+
+**Exit criteria**
+
+- Both public URLs answer with real citations.
+- Both read the same corpus from the shared database.
+- An out-of-scope request is refused on both.
+- A not-in-corpus request refuses and names what it searched, on both.
+- `Claim.source` still exists — dropping it is a later release.
+
+> **`git push` updates Railway but not Vercel.** Verify the Vercel URL specifically; do not infer it from a successful push.
+
+---
+
+## Decisions to Lock Before Phase 20
+
+Each changes measured results, so each must be fixed and recorded before the question bank runs ([rag-architecture.md §31](rag-architecture.md)).
+
+| # | Decision | Leaning | Settle in |
+|---|---|---|---|
+| 1 | Which 5–7 documents | The recommended seven | Phase 12 |
+| 2 | Chunk target / cap / overlap | 500 / 900 / 80 tokens | Phase 14, confirm Phase 20 |
+| 3 | Table handling | Keep whole, allow over-cap, flag | Phase 14 |
+| 4 | Embedding model + dimension | OpenAI `text-embedding-3-small`, 1536 | Phase 15 |
+| 5 | `k` | 5 — **budget-bound, see Risks** | Phase 20 |
+| 6 | Index type | Exact search, no ANN — already settled by corpus size | Phase 13 |
+| 7 | Sufficiency thresholds | Calibrate against the bank | Phase 20 |
+| 8 | `restricted` chunk policy | Flag and retrieve, never restate targets | Phase 14 |
+| 9 | Near-miss corpus boundary | **Not children** | Phase 12 |
+| 10 | Document-filter UI | API + eval only | Phase 19 |
+
+---
+
+## Risks
+
+| Risk | Why it matters | Mitigation | Phase |
+|---|---|---|---|
+| **Token budget throttling** | At `k`=5 × 500 tokens, each request costs ~4,200–5,200 tokens against a 7,000 tok/min margin — about **1–1.5 requests/minute**. A full evaluation is 60+ calls, so **40+ minutes of throttling per run** | Tune `k` and chunk size together; trim history on grounded calls; consider a higher Groq tier **before** Phase 20 | 20, 21 |
+| **Near-miss answers from the wrong scope** | The quietest way this milestone fails — a confident answer from a nearly-correct section | Section metadata in context, prompt instruction, explicit adversarial test. Expect to measure, not eliminate | 16, 21 |
+| **Scope conflict with the corpus** | Both the DGA *and* EFSA state per-kg-body-weight and calorie figures. A leak now arrives with a real government citation attached | Ingestion-time `restricted` flag applied corpus-wide, not per document; dedicated test | 14, 21 |
+| **Wrong edition ingested** | Already hit 2 of 11 candidates. Produces a fabricated citation behind a working link | `expectTitleContains` / `expectYearIn` abort the ingest | 12, 14 |
+| **Short documents crowded out** | EFSA is 18× the DGA by word count | Per-document recall reporting first; per-document quotas only if needed | 14, 20 |
+| **Asymmetric deploys against one database** | One host runs new code, the other old, against the same Postgres | Additive-only migrations; verify both URLs | 13, 22 |
+| **Embedding provider is a new dependency** | Groq has no embeddings endpoint, so this is a new credential and failure domain | Offline corpus embedding; hard-fail on query-embed failure with **no ungrounded fallback** | 15 |
 
 ---
 
@@ -148,15 +362,15 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
-| 0 | Scaffolded repo | — |
-| 1 | DB schema + client | 0 |
-| 2 | Response schema + system prompt | 0 |
-| 3 | LLM call wrapper | 2 |
-| 4 | Scope guard (unit-level) | 2 |
-| 5 | `/api/chat` route | 1, 3, 4 |
-| 6 | Chat UI | 5 |
-| 7 | Eval dataset + harness | 5 |
-| 8 | End-to-end scope testing | 5, 7 |
-| 9 | Prompt iteration loop | 7, 8 |
-| 10 | Deployment | 5, 6 |
-| 11 | Milestone 2 readiness check | 9, 10 |
+| 0–11 | **Milestone 1 — complete** | — |
+| 12 | Corpus manifest + acquired files | 11 |
+| 13 | Additive migration + pgvector + `retrievalConfig` | 11 |
+| 14 | `scripts/ingest.ts`, populated corpus | 12, 13 |
+| 15 | `lib/retrieval.ts`, `lib/embeddings.ts` | 14 |
+| 16 | `lib/sufficiency.ts` | 15 |
+| 17 | `CitationSchema`, `LlmClaimSchema`, `SYSTEM_PROMPT_RAG` | 13 |
+| 18 | `lib/citations.ts` + rewired `/api/chat` | 15, 16, 17 |
+| 19 | `SourcesPanel` rewrite | 18 |
+| 20 | Question bank, retrieval harness, locked config | 18 |
+| 21 | Adversarial, spot-check, M1 regression | 19, 20 |
+| 22 | Deployment to both targets | 21 |

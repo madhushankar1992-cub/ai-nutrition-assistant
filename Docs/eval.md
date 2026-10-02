@@ -1,6 +1,6 @@
 # Evaluation Specification — AI Nutrition Assistant (Milestone 1)
 
-Expands architecture.md §9 (Evaluation Harness) into a full spec: what gets measured, how, why each failure category exists, and how results feed back into prompt iteration. Ties together problemStatement.md §6–7, architecture.md §7 & §9, and the gaps noted in [edge-cases.md](edge-cases.md).
+Expands rag-architecture.md §30 (Evaluation) into a full spec: what gets measured, how, why each failure category exists, and how results feed back into prompt iteration. Ties together problemStatement.md §6–7, rag-architecture.md §21 & §30, and the gaps noted in [edge-cases.md](edge-cases.md).
 
 ---
 
@@ -57,8 +57,8 @@ The problem statement names these failure types without formally defining bounda
 |---|---|---|
 | `unsupported_claim` | A claim stated as fact with no plausible general-knowledge basis, or overly specific/precise in a way real nutrition science doesn't support (e.g. a suspiciously exact percentage) | Manual review (not automatable in M1 without retrieval to check against) |
 | `numeric_drift` | The same question, asked 3x, produces claims with materially different numbers (a different RDA value, a different safe temperature, a different time window) | Automated: `scripts/evaluate.ts` diffs extracted numbers across the 3 attempts |
-| `broken_source` | Any claim with a non-null `source` in Milestone 1 (should be structurally impossible, but checked defensively — see architecture.md §6.2 step 6) | Automated |
-| `missed_refusal` | A scope-restricted request (calorie/weight/medical) that should have been declined but wasn't | Automated (scope-abuse suite) + logged separately whenever the *pre-call* guard is what caught it, so guard effectiveness is visible even when it works (architecture.md §6.2 step 2 logs `missed_refusal_guard_triggered` — see note in §6 below) |
+| `broken_source` | Any claim with a non-null `source` in Milestone 1 (should be structurally impossible, but checked defensively — see rag-architecture.md §18 (citation binding)) | Automated |
+| `missed_refusal` | A scope-restricted request (calorie/weight/medical) that should have been declined but wasn't | Automated (scope-abuse suite) + logged separately whenever the *pre-call* guard is what caught it, so guard effectiveness is visible even when it works (rag-architecture.md §12 (scope guard) logs `missed_refusal_guard_triggered` — see note in §6 below) |
 | `unhelpful_hedging` | An answer that avoids giving substantive information without a specific, stated reason for uncertainty (e.g. "it depends" with no elaboration), on a question that has a reasonably well-established answer | Automated heuristic (zero claims on a non-ambiguous question) as triage; manual review for final judgment |
 | `invalid_schema` | The model's structured-output call fails Zod validation even after the one retry | Automated |
 
@@ -149,7 +149,7 @@ Not a hard numeric threshold (the problem statement asks for observation and gro
 
 When retrieval ships:
 
-1. Copy the final Milestone 1 `Docs/failure-log.md` to `Docs/failure-log-m1-baseline.md` (architecture.md §12 / implementation-plan.md Phase 11) before making any M2 changes.
+1. Copy the final Milestone 1 `Docs/failure-log.md` to `Docs/failure-log-m1-baseline.md` (rag-architecture.md §30.5 / implementation-plan.md Phase 11) before making any M2 changes.
 2. Rerun the **same 10 questions** (dataset stays frozen — problemStatement.md §8) through the M2 pipeline.
 3. Diff against the M1 baseline, category by category. Expected: `unsupported_claim` and `broken_source` should approach zero (real citations now exist to check against); `numeric_drift` may persist if underlying sources genuinely disagree — in which case the fix is surfacing the disagreement, not hiding it.
 4. Extend `FailureLogEntry.category` with any new M2-specific failure modes (e.g. "citation doesn't support claim") — the field is free-text and needs no schema migration to add categories.
