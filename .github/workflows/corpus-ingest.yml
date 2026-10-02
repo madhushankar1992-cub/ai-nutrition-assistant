@@ -1,6 +1,6 @@
 name: Corpus ingest
 
-# Daily pipeline: scrape -> chunk -> embed -> upload to Chroma Cloud.
+# Daily pipeline: scrape -> chunk -> embed -> store in Postgres/pgvector.
 #
 # SCHEDULE: GitHub Actions cron is always UTC and has no timezone option.
 #   03:45 UTC  ==  09:15 IST (UTC+05:30)   <- the requested 9:15 AM, India time
@@ -9,7 +9,7 @@ name: Corpus ingest
 #
 # ORDER MATTERS and is enforced by the job steps below:
 #   1. watch   - fetch every source, verify it is still the registered edition
-#   2. ingest  - chunk, embed locally with bge-small-en-v1.5, upsert to Chroma
+#   2. ingest  - chunk, embed locally with bge-small-en-v1.5, upsert to pgvector
 #
 # The ingest step ABORTS a document whose title or year no longer matches the
 # registry. That is the point: silently re-ingesting a new edition would leave
@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run everything except the Chroma Cloud upload"
+        description: "Run everything except the database write"
         type: boolean
         default: false
       source:
@@ -45,10 +45,6 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      CHROMA_API_KEY: ${{ secrets.CHROMA_API_KEY }}
-      CHROMA_TENANT: ${{ secrets.CHROMA_TENANT }}
-      CHROMA_DATABASE: ${{ secrets.CHROMA_DATABASE }}
-      CHROMA_COLLECTION: ${{ vars.CHROMA_COLLECTION || 'nutrition-guidance' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +89,7 @@ jobs:
       # --- Step 2: chunk, embed, upload ----------------------------------
       # Runs even when the watcher flagged a change, because ingest has its own
       # edition guard and will abort per-document rather than per-run.
-      - name: Ingest to Chroma Cloud
+      - name: Ingest to pgvector
         id: ingest
         run: |
           ARGS=""

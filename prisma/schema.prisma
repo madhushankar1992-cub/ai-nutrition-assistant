@@ -44,6 +44,54 @@ model EvalRun {
   claimsJson    String // JSON-encoded array of { text, source }; kept as String (not Json) to avoid touching working eval code
 }
 
+// --- Corpus vectors (Milestone 2) ------------------------------------------
+// Vectors live in this Postgres via pgvector, not in a hosted vector service.
+// Chroma Cloud was the earlier plan and was dropped: it added a third provider
+// and a third credential, and its availability is outside our control. pgvector
+// puts the index beside the data both deployments already share.
+//
+// The `embedding vector(384)` column is added by raw SQL in the migration —
+// Prisma has no native vector type — and all similarity queries use $queryRaw.
+// 384 dimensions is bge-small-en-v1.5; changing the model means a new column
+// and a full re-embed, which `configHash` makes detectable.
+
+model Document {
+  id          String   @id @default(uuid())
+  sourceKey   String   @unique // registry key from lib/corpus/sources.ts
+  name        String
+  publisher   String
+  year        Int // read from INSIDE the document, never from the linking page
+  edition     String?
+  url         String // reader-facing; what a citation links to
+  fileUrl     String // what ingestion fetches
+  checksum    String // sha256 — detects a silently changed document
+  retrievedAt DateTime @default(now())
+  pageCount   Int?
+  wordCount   Int?
+  licenseNote String?
+  chunks      Chunk[]
+}
+
+model Chunk {
+  id                String   @id @default(uuid())
+  documentId        String
+  document          Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  ordinal           Int
+  section           String
+  sectionConfidence String // numbered | typographic | inherited
+  page              Int
+  text              String
+  tokenCount        Int
+  kind              String // prose | table
+  restricted        Boolean  @default(false) // calorie / per-kg-bodyweight content
+  configHash        String // which RetrievalConfig produced this chunk
+  createdAt         DateTime @default(now())
+
+  @@unique([documentId, configHash, ordinal])
+  @@index([documentId])
+  @@index([configHash])
+}
+
 // --- Corpus watcher (Milestone 2 groundwork) -------------------------------
 // Additive only: nothing above is altered, so one deploy target can still run
 // Milestone 1 code against this schema while the other runs new code.

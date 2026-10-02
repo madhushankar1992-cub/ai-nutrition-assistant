@@ -48,8 +48,8 @@ function Header({
             type="button"
             onClick={onClear}
             disabled={isClearing}
-            aria-label="Clear chat history"
-            title="Clear chat history"
+            aria-label="Clear this chat"
+            title="Clear this chat"
             className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full border border-white/10 bg-surface transition hover:border-red-400/40 hover:text-red-400 disabled:opacity-50 sm:h-[38px] sm:w-[38px]"
           >
             <TrashIcon className="h-[15px] w-[15px] text-ink-muted sm:h-[16px] sm:w-[16px]" />
@@ -101,24 +101,198 @@ function EmptyState({ onPick }: { onPick: (question: string) => void }) {
   );
 }
 
+// --- Multi-threaded sessions -----------------------------------------------
+// Each thread owns its own conversationId, messages, draft and loading flag.
+// Nothing is shared between threads, so two can be in flight at once and
+// neither can see the other's history.
+//
+// Isolation comes from three things:
+//   - The server already loads prior turns by conversationId, so threads are
+//     separated in the database. This mirrors that separation in the client.
+//   - Every state update is keyed by session id instead of written to one
+//     shared variable. Previously a reply wrote conversationId into a single
+//     piece of state, so a second message sent before the first returned could
+//     attach itself to the wrong conversation.
+//   - isLoading is per thread, so sending in one thread no longer disables the
+//     input in all the others.
+
+interface Session {
+  id: string;
+  title: string;
+  conversationId: string | null;
+  messages: ChatMessage[];
+  selectedId: string | null;
+  draft: string;
+  isLoading: boolean;
+}
+
+const STORAGE_KEY = "nutrition-assistant-sessions-v1";
+const MAX_SESSIONS = 20;
+
+function newSession(index = 1): Session {
+  return {
+    id: uuidv4(),
+    title: "Chat " + index,
+    conversationId: null,
+    messages: [],
+    selectedId: null,
+    draft: "",
+    isLoading: false,
+  };
+}
+
+/** Name a thread after its first question, so the list is scannable. */
+function titleFrom(text: string): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length <= 38 ? t : t.slice(0, 37).trimEnd() + "…";
+}
+
+function loadSessions(): Session[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Session[];
+    if (!Array.isArray(parsed) || !parsed.length) return [];
+    // isLoading is never restored: an in-flight request did not survive a reload.
+    return parsed.slice(0, MAX_SESSIONS).map((s) => ({ ...s, isLoading: false }));
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions: Session[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.slice(0, MAX_SESSIONS)));
+  } catch {
+    // Private mode or blocked storage. Threads still work for this page view.
+  }
+}
+
+function ThreadRail({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+  onClose,
+}: {
+  sessions: Session[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onClose: (id: string) => void;
+}) {
+  return (
+    <aside className="hidden w-[232px] shrink-0 flex-col border-r border-white/10 bg-surface-dim md:flex">
+      <div className="flex h-[78px] shrink-0 items-center px-4">
+        <button
+          type="button"
+          onClick={onNew}
+          className="w-full rounded-xl border border-accent/30 bg-accent/10 px-3 py-2.5 text-[13px] font-medium text-accent transition hover:bg-accent/20"
+        >
+          + New chat
+        </button>
+      </div>
+      <div className="thin-scrollbar flex-1 overflow-y-auto px-2.5 pb-4">
+        {sessions.map((s) => {
+          const isActive = s.id === activeId;
+          return (
+            <div
+              key={s.id}
+              className={
+                "group mb-1 flex items-center gap-1 rounded-lg px-2.5 py-2 text-[13px] transition " +
+                (isActive ? "bg-white/[0.08] text-ink" : "text-ink-muted hover:bg-white/[0.04]")
+              }
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(s.id)}
+                className="min-w-0 flex-1 truncate text-left"
+                title={s.title}
+              >
+                {s.isLoading && <span className="mr-1.5 text-accent">&bull;</span>}
+                {s.title}
+              </button>
+              {sessions.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onClose(s.id)}
+                  aria-label={"Close " + s.title}
+                  className="shrink-0 rounded px-1 text-ink-faint opacity-0 transition hover:text-red-400 group-hover:opacity-100"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
 export function ChatWindow() {
-  const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [sessions, setSessions] = useState<Session[]>(() => [newSession(1)]);
+  const [activeId, setActiveId] = useState<string>("");
   const [isClearing, setIsClearing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Restore threads on mount rather than in useState, so the server render and
+  // the first client render agree (localStorage does not exist on the server).
+  useEffect(() => {
+    const restored = loadSessions();
+    if (restored.length) {
+      setSessions(restored);
+      setActiveId(restored[0].id);
+    } else {
+      setActiveId((prev) => prev || sessions[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (sessions.length) saveSessions(sessions);
+  }, [sessions]);
+
+  const active = sessions.find((s) => s.id === activeId) ?? sessions[0];
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [active?.messages, active?.isLoading]);
+
+  /** Update exactly one session. This is what keeps threads isolated. */
+  function patch(sessionId: string, update: (s: Session) => Session) {
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? update(s) : s)));
+  }
+
+  function handleNew() {
+    const created = newSession(sessions.length + 1);
+    setSessions((prev) => [created, ...prev].slice(0, MAX_SESSIONS));
+    setActiveId(created.id);
+  }
+
+  function handleClose(id: string) {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      const safe = next.length ? next : [newSession(1)];
+      if (id === activeId) setActiveId(safe[0].id);
+      return safe;
+    });
+  }
 
   async function handleSend(content: string) {
-    setDraft("");
+    // Capture the thread now: the user may switch threads while this request is
+    // in flight, and the reply must still land in the thread it came from.
+    const sessionId = active.id;
+    const conversationId = active.conversationId;
     const userMessage: ChatMessage = { id: uuidv4(), role: "user", content };
-    setMessages((prev) => [...prev, userMessage]);
-    setIsLoading(true);
+
+    patch(sessionId, (s) => ({
+      ...s,
+      draft: "",
+      messages: [...s.messages, userMessage],
+      isLoading: true,
+      title: s.messages.length === 0 ? titleFrom(content) : s.title,
+    }));
 
     try {
       const res = await fetch("/api/chat", {
@@ -128,73 +302,95 @@ export function ChatWindow() {
       });
       const data = await res.json();
 
-      if (data.conversationId) setConversationId(data.conversationId);
-
       const assistantMessage: ChatMessage = {
         id: uuidv4(),
         role: "assistant",
         content: data.answer ?? "Sorry, something went wrong.",
         claims: data.claims ?? [],
       };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setSelectedId(assistantMessage.id);
+
+      patch(sessionId, (s) => ({
+        ...s,
+        conversationId: data.conversationId ?? s.conversationId,
+        messages: [...s.messages, assistantMessage],
+        selectedId: assistantMessage.id,
+        isLoading: false,
+      }));
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: uuidv4(),
-          role: "assistant",
-          content: "Sorry, something went wrong reaching the server.",
-          claims: [],
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
+      patch(sessionId, (s) => ({
+        ...s,
+        messages: [
+          ...s.messages,
+          {
+            id: uuidv4(),
+            role: "assistant",
+            content: "Sorry, something went wrong reaching the server.",
+            claims: [],
+          },
+        ],
+        isLoading: false,
+      }));
     }
   }
 
   async function handleClear() {
+    const sessionId = active.id;
+    const conversationId = active.conversationId;
     setIsClearing(true);
     try {
       if (conversationId) {
-        await fetch(`/api/chat?conversationId=${encodeURIComponent(conversationId)}`, {
+        await fetch("/api/chat?conversationId=" + encodeURIComponent(conversationId), {
           method: "DELETE",
         });
       }
     } catch {
-      // Best-effort: even if the server delete fails, still reset the client
-      // view so the user isn't stuck looking at a conversation they asked to clear.
+      // Best-effort: even if the server delete fails, still reset this thread's
+      // view so the user isn't stuck looking at a conversation they cleared.
     } finally {
-      setMessages([]);
-      setConversationId(null);
-      setSelectedId(null);
-      setDraft("");
+      patch(sessionId, (s) => ({
+        ...s,
+        messages: [],
+        conversationId: null,
+        selectedId: null,
+        draft: "",
+        isLoading: false,
+      }));
       setIsClearing(false);
     }
   }
 
-  const selectedMessage = messages.find((m) => m.id === selectedId) ?? null;
-  const isEmpty = messages.length === 0;
+  if (!active) return null;
+
+  const selectedMessage = active.messages.find((m) => m.id === active.selectedId) ?? null;
+  const isEmpty = active.messages.length === 0;
 
   return (
     <div className="flex h-screen bg-bg bg-dot-grid">
+      <ThreadRail
+        sessions={sessions}
+        activeId={active.id}
+        onSelect={setActiveId}
+        onNew={handleNew}
+        onClose={handleClose}
+      />
+
       <div className="flex min-w-0 flex-1 flex-col">
         <Header hasMessages={!isEmpty} isClearing={isClearing} onClear={handleClear} />
 
         <div className={`thin-scrollbar flex flex-1 flex-col overflow-y-auto ${isEmpty ? "bg-dot-grid-hero" : ""}`}>
           {isEmpty ? (
-            <EmptyState onPick={setDraft} />
+            <EmptyState onPick={(q) => patch(active.id, (s) => ({ ...s, draft: q }))} />
           ) : (
             <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-[18px] px-4 py-6 sm:gap-[22px] sm:px-10 sm:py-9">
-              {messages.map((m) => (
+              {active.messages.map((m) => (
                 <MessageBubble
                   key={m.id}
                   message={m}
-                  selected={m.id === selectedId}
-                  onSelect={() => setSelectedId(m.id)}
+                  selected={m.id === active.selectedId}
+                  onSelect={() => patch(active.id, (s) => ({ ...s, selectedId: m.id }))}
                 />
               ))}
-              {isLoading && <TypingIndicator />}
+              {active.isLoading && <TypingIndicator />}
               <div ref={bottomRef} />
             </div>
           )}
@@ -202,7 +398,12 @@ export function ChatWindow() {
 
         <div className="flex shrink-0 justify-center px-4 pb-5 pt-4 sm:px-10 sm:pb-[26px] sm:pt-[22px]">
           <div className="w-full max-w-[720px]">
-            <ChatInput value={draft} onChange={setDraft} disabled={isLoading} onSend={handleSend} />
+            <ChatInput
+              value={active.draft}
+              onChange={(v) => patch(active.id, (s) => ({ ...s, draft: v }))}
+              disabled={active.isLoading}
+              onSend={handleSend}
+            />
             <p className="mt-2.5 text-center text-[11.5px] text-ink-faint">
               General information only, not medical advice — please consult a qualified
               professional for personal guidance.

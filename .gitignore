@@ -27,3 +27,4 @@ prisma/*.db
 
 .vercel
 .env*
+logs/

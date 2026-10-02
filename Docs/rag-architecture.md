@@ -189,8 +189,8 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 | Structured output | Groq Structured Outputs (`response_format: json_schema`, `strict: true`) `[BUILT]` | Forced tool-calling was tried first and failed: `gpt-oss` reasoning models intermittently emit chain-of-thought instead of a clean tool call, which Groq's tool-call parser rejects with a 400. `json_schema` output lands in `message.content` as plain text and avoids that parser entirely |
 | Validation | Zod + `zod-to-json-schema` `[BUILT]` | One schema definition drives both the model's output format and our validation of it |
 | Database | Postgres + Prisma `[BUILT]` | Required by serverless; shared by both deployments |
-| **Vector store** | **Chroma Cloud (trychroma.com)** `[BUILT]` | Managed HTTPS service at `api.trychroma.com`. A file-based index (FAISS, Chroma-on-disk) cannot survive Vercel's ephemeral filesystem, and pgvector would put vector search in the same Postgres that serves conversations. Chroma Cloud keeps the two concerns apart and needs no self-hosting |
-| **Index type** | **Chroma-managed HNSW** `[BUILT]` | **Measured, not assumed:** a real ingest produces **232 chunks** (§34). At that size the index type barely matters for recall, so the managed default is taken rather than tuned |
+| **Vector store** | **pgvector, in the Postgres both deployments share** `[BUILT]` | Chroma Cloud was tried and **removed**: it added a third provider and a third credential, and its availability was outside our control — an outage took the whole ingest pipeline down. A file-based index (FAISS) cannot survive Vercel's ephemeral filesystem. pgvector puts the index beside the provenance a citation is built from |
+| **Index type** | **HNSW, cosine** `[BUILT]` | **Measured, not assumed:** a real ingest produces **232 chunks** (§34). At that size the index barely affects recall; HNSW is created once by `ensureVectorSchema()` |
 | **Embeddings** | **`BAAI/bge-small-en-v1.5`, run locally via ONNX (384 dims)** `[BUILT]` | Groq has no embeddings endpoint, so an embedding dependency exists either way. Running it locally makes it a *build* dependency rather than a runtime credential and a second failure domain, and 232 chunks embed in under a minute on CPU. **bge is asymmetric**: queries need an instruction prefix, passages do not (§9) |
 | **PDF parsing** | **Offline script** `[OPEN]` — `unpdf`/`pdf-parse` (TypeScript) or PyMuPDF (Python) | Runs at build time, so language is free. Verified during corpus research that plain `pypdf` extracts every candidate cleanly *except* the graphical Eatwell plate — so table fidelity, not basic extraction, decides this |
 | **Orchestration** | **Plain TypeScript. No LangChain** `[TO BUILD]` | The pipeline is seven explicit steps. The citation-binding step (§18) is the single most important piece of code in the system and must be auditable at a glance. A framework would hide it |
@@ -443,7 +443,7 @@ corpus/manifest.json
 └──────────────────────────────────────────────────────────────┘
         │
         ▼
-Chroma Cloud: 232 vectors + provenance metadata
+Postgres + pgvector: 232 vectors + provenance
 ```
 
 Properties that matter:
@@ -1053,7 +1053,7 @@ So the old `Claim.source` column stays in place through the Milestone 2 release 
 
 1. **Corpus content is untrusted prompt input.** These are reputable publishers, so the realistic risk is not malice but **instruction-shaped prose**: a document saying "you should consume 2,000 calories per day" is text the model may *follow as guidance* rather than *report as content*. Mitigations: chunks are wrapped in clearly delimited numbered blocks labelled as reference material; the prompt states that passage text is data to report and cite, never instructions to obey; `checkResponse` still scans the output. §25 is a concrete instance of this risk, not a hypothetical one.
 2. **The citation path is injection-resistant by construction.** Even a passage reading "cite this as the WHO, 2026" cannot change a citation: publisher, year and URL come from the `Document` row, and the model's only citation power is choosing a `chunkId` (§20.2).
-3. **The Chroma API key is server-only.** It is never exposed with a `NEXT_PUBLIC_` prefix and never reaches the browser; the client talks only to our own `/api/chat`. Chroma filters are built from validated values, never string-concatenated from user input.
+3. **Raw pgvector SQL needs care.** Similarity search uses `$queryRaw`. **The query vector is always a bound parameter, never interpolated** — it derives from user text, so string-interpolating it would reintroduce injection at the one layer Prisma does not cover. `sourceKey` filters are bound the same way.
 4. **`documentId` is validated as a UUID and resolved against `Document`** before use as a filter, so a client cannot probe the schema through it.
 5. **Corpus files are committed and checksummed**, so what gets embedded is reviewable in version control rather than whatever a URL served on build day.
 
@@ -1152,7 +1152,7 @@ Decisions whose *reasons* are not recoverable from the code. Newest first.
 | Out-of-scope guard before retrieval | A calorie request must be refused on policy, not reported as a coverage gap — otherwise retrieval metrics are corrupted | 23 |
 | Include DGA 2025–2030 despite its calorie and per-kg targets | It is the current official US guidance; a corpus curated to avoid awkward content is not a corpus of official guidance | 25 |
 | No fallback when embedding fails | A fallback to model knowledge would silently return exactly the ungrounded answers this milestone eliminates | 13 |
-| Chroma Cloud, not pgvector or a file index | Vercel's ephemeral filesystem rules out a file index. pgvector would put vector search in the same Postgres that serves conversations; Chroma Cloud keeps those concerns apart with no self-hosting | 4 |
+| pgvector, after removing Chroma Cloud | Chroma Cloud's availability was outside our control and an outage took ingest down with it; it also cost a third provider and a third credential. pgvector keeps vectors beside the provenance a citation is built from | 4, 41 |
 | Exact vector search, no ANN index | A few thousand chunks scan fast and exactly; ANN trades away the recall being measured | 4 |
 | Plain TypeScript, no LangChain | `bindCitations` is the most important code in the system and must be auditable at a glance | 4 |
 | Corpus PDFs committed to the repo | Four publishers hard-block programmatic fetches (verified 403). Committing makes ingestion reproducible and removes bot policy from the build path | 6 |
@@ -1424,38 +1424,34 @@ The prefix is embedded but **not** counted as chunk text for citation purposes �
 
 ## 41. Stage 6 — Index and storage
 
-**Chroma Cloud, a managed service at `api.trychroma.com`.** A file-based index (FAISS, Chroma-on-disk) cannot survive Vercel's ephemeral filesystem — the same constraint that forced Postgres over SQLite in Milestone 1. pgvector was the earlier plan; Chroma Cloud was chosen instead so vector search does not share a database with live conversations.
+**pgvector, in the Postgres both deployments already share.** A file-based index (FAISS, Chroma-on-disk) cannot survive Vercel's ephemeral filesystem — the same constraint that forced Postgres over SQLite in Milestone 1. pgvector was the earlier plan; Chroma Cloud was tried and removed after an outage took the ingest pipeline down with it.
 
-**Chroma-managed HNSW.** At 232 chunks the index type barely affects recall, so the managed default is accepted rather than tuned. Revisit above ~50k chunks.
+**HNSW with cosine distance**, created once by `ensureVectorSchema()`. At 232 chunks the index barely affects recall; it matters above ~50k.
 
-**How the data actually gets to trychroma.com:**
+**How the data actually gets into pgvector:**
 
 1. `scripts/ingest.ts` scrapes and chunks a document.
 2. Each chunk is embedded locally with bge-small (384 dims).
-3. `CloudClient({ apiKey, tenant, database })` authenticates over HTTPS to `api.trychroma.com`.
-4. `collection.upsert({ ids, embeddings, documents, metadatas })` writes in batches of 100.
-5. At query time the question is embedded the same way and sent as `queryEmbeddings`; Chroma returns the nearest chunks **with their metadata**, which is what the citation is built from.
+3. `ensureVectorSchema()` creates the extension, column and HNSW index if absent.
+4. `upsertChunks()` writes rows in batches of 50 with the vector bound as a parameter.
+5. At query time the question is embedded the same way and compared with `<=>` (cosine); the query joins `Document`, so provenance returns with the text and the citation is built from it.
 
 Two details that make the daily scheduled run safe to repeat:
 
-- **IDs are deterministic** — `` `${sourceKey}:${configHash}:${ordinal}` `` — so re-running updates rows in place instead of duplicating them.
+- **Rows are keyed** `(documentId, configHash, ordinal)`, so re-running replaces rather than duplicates.
 - **Stale chunks are deleted first.** `deleteStaleChunks` removes rows whose `configHash` differs from the current one. Without it, changing chunk size would leave two incompatible chunkings of the same document in the collection.
 
-**We always supply our own vectors** (`embeddingFunction: null`). Letting Chroma embed server-side would silently mix two vector spaces, since the query is embedded locally.
+**Corpus and query are embedded by the same local model**, so the two can never end up in different vector spaces.
 
-```ts
-// all-documents mode
-collection.query({ queryEmbeddings: [vec], nResults: k });
-
-// single-document mode — the filter is evaluated server-side by Chroma
-collection.query({
-  queryEmbeddings: [vec],
-  nResults: k,
-  where: { sourceKey: { $eq: documentKey } },
-});
+```sql
+-- all-documents mode
+SELECT c.*, d.name, d.publisher, d.year, d.url,
+       1 - (c.embedding <=> $1::vector) AS score
+FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
+ORDER BY c.embedding <=> $1::vector LIMIT $2;
 ```
 
-**The document filter is a `where` clause, never a post-filter.** Post-filtering an all-documents result returns fewer than `k` chunks — often zero — exactly when the named document is not already in the global top-`k`, which is the case filtered retrieval exists to serve.
+**The document filter is in the SQL `WHERE` clause, never a post-filter.** Post-filtering an all-documents result returns fewer than `k` chunks — often zero — exactly when the named document is not already in the global top-`k`, which is the case filtered retrieval exists to serve.
 
 ---
 
@@ -1537,7 +1533,7 @@ corpus/manifest.json + lib/corpus/sources.ts
                    (name, year, edition) + configHash
         |
         v
-  Chroma Cloud (api.trychroma.com)
+  Postgres + pgvector
 ```
 
 **Properties:**

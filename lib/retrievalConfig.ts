@@ -27,8 +27,8 @@ export const RETRIEVAL_CONFIG = {
   embeddingDimensions: 384,
 
   // Index
-  vectorStore: "chroma-cloud",
-  indexType: "hnsw-managed",
+  vectorStore: "pgvector",
+  indexType: "hnsw-cosine",
   k: 5,
 
   // Sufficiency gate — calibrated against the question bank, not guessed.
