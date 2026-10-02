@@ -78,6 +78,11 @@ model Document {
   chunks      Chunk[]
 }
 
+/// Holds one more column than is declared here: `embedding vector(384)`, added
+/// by migration 20261003120000_chunk_embedding_vector. Prisma has no vector
+/// type, so it cannot be modelled — and `prisma db push` DROPS it, because it
+/// diffs against this file and sees a column it does not know about. Use
+/// `prisma migrate deploy` on any database holding real chunks.
 model Chunk {
   id                String   @id @default(uuid())
   documentId        String
@@ -88,7 +93,7 @@ model Chunk {
   page              Int
   text              String
   tokenCount        Int
-  kind              String // prose | table
+  kind              String // prose | table | references | toc — the last two are never retrieved
   restricted        Boolean  @default(false) // calorie / per-kg-bodyweight content
   configHash        String // which RetrievalConfig produced this chunk
   createdAt         DateTime @default(now())

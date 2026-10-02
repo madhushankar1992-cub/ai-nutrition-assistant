@@ -174,6 +174,19 @@ export interface RetrievedChunk {
  * named document is not already in the global top-k, which is the case
  * single-document retrieval exists to serve.
  */
+/**
+ * Chunk kinds that are never retrievable.
+ *
+ * A bibliography and a contents page are built from the same vocabulary as the
+ * chapters they point at, so they match those chapters' questions while being
+ * unable to answer any of them. Excluded in the WHERE clause rather than
+ * filtered afterwards, so they do not consume slots in the candidate pool.
+ */
+export const NON_ANSWERING_KINDS = ["references", "toc"] as const;
+
+/** Written once and interpolated into both queries so the two cannot drift. */
+const EXCLUDE_NON_ANSWERING = Prisma.sql`c.kind NOT IN ('references', 'toc')`;
+
 export async function queryChunks(
   queryEmbedding: number[],
   k: number,
@@ -188,6 +201,7 @@ export async function queryChunks(
                1 - (c.embedding <=> ${vec}::vector) AS score
         FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
         WHERE d."sourceKey" = ${sourceKey} AND c.embedding IS NOT NULL
+          AND ${EXCLUDE_NON_ANSWERING}
         ORDER BY c.embedding <=> ${vec}::vector
         LIMIT ${k}`
     : await prisma.$queryRaw<any[]>`
@@ -196,6 +210,7 @@ export async function queryChunks(
                1 - (c.embedding <=> ${vec}::vector) AS score
         FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
         WHERE c.embedding IS NOT NULL
+          AND ${EXCLUDE_NON_ANSWERING}
         ORDER BY c.embedding <=> ${vec}::vector
         LIMIT ${k}`;
 

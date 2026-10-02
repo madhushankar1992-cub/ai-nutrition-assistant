@@ -42,8 +42,46 @@ function terms(text: string): string[] {
     .filter((w) => w.length > 2 && !STOPWORDS.has(w));
 }
 
+/** Crude stemming: "leftovers" should match "leftover". */
+function stemOf(term: string): string {
+  const stem = term.replace(/(ies|es|s)$/, "");
+  return stem.length > 3 ? stem : term;
+}
+
+function occurrencesOf(needle: string, haystack: string): number {
+  return haystack.split(needle).length - 1;
+}
+
 /**
- * Lexical relevance by term DENSITY, not presence.
+ * How much each query term is worth, measured against the candidate pool.
+ *
+ * A term shared by every candidate cannot separate them, however important it
+ * looks in the question. This is the measured failure: for "What is the dietary
+ * fibre REFERENCE VALUE for ADULTS?" against EFSA's reference-values report,
+ * "reference", "value" and "adults" appear in nearly every candidate, so an
+ * equal-weight average let three bibliography chunks score 0.58-0.60 while the
+ * passage actually stating 25 g/day scored no better. Only "fibre" discriminates.
+ *
+ * Weighting by inverse candidate frequency is computed over the retrieved pool
+ * rather than the whole corpus: the job here is to separate THESE candidates
+ * from one another, and it needs no corpus statistics, no extra query, and no
+ * index to keep in sync.
+ */
+function candidateIdf(queryTerms: string[], passages: string[]): Map<string, number> {
+  const idf = new Map<string, number>();
+  const n = Math.max(1, passages.length);
+
+  for (const term of queryTerms) {
+    const needle = stemOf(term);
+    const df = passages.filter((p) => p.includes(needle)).length;
+    // log(1 + N/df): ~0 when every candidate has it, highest when one does.
+    idf.set(term, Math.log(1 + (n - df) / n) / Math.log(2));
+  }
+  return idf;
+}
+
+/**
+ * Lexical relevance by term DENSITY, weighted by how distinctive each term is.
  *
  * Binary presence was tried first and failed in a specific, measurable way:
  * every top candidate scored 1.000 because the HTML chunks were large enough
@@ -51,31 +89,40 @@ function terms(text: string): string[] {
  * "leftovers" somewhere, even when the passage was about fridge power
  * settings. A metric that saturates cannot rank.
  *
- * Density fixes that: a passage mentioning "leftovers" twice in 200 tokens
- * beats one mentioning it once in 700. Scores are normalised per 100 tokens
- * and averaged over the query's distinctive terms, so a passage must be about
- * the question rather than merely contain its words.
+ * Density fixes that — a passage mentioning "leftovers" twice in 200 tokens
+ * beats one mentioning it once in 700 — and the IDF weight above fixes the
+ * remaining half of the problem, where a passage scored well on words every
+ * candidate shared.
  */
-function lexicalRelevance(queryTerms: string[], passage: string): number {
+function lexicalRelevance(
+  queryTerms: string[],
+  passage: string,
+  idf: Map<string, number>
+): number {
   if (!queryTerms.length) return 0;
 
   const haystack = " " + passage.toLowerCase().replace(/[^a-z0-9\s-]/g, " ") + " ";
   const passageTokens = Math.max(1, haystack.split(/\s+/).length);
 
   let total = 0;
+  let weightSum = 0;
   for (const term of queryTerms) {
-    // Crude stemming: "leftovers" should match "leftover".
-    const stem = term.replace(/(ies|es|s)$/, "");
-    const needle = stem.length > 3 ? stem : term;
-    const occurrences = haystack.split(needle).length - 1;
+    const weight = idf.get(term) ?? 0;
+    weightSum += weight;
+    if (weight === 0) continue;
+
+    const occurrences = occurrencesOf(stemOf(term), haystack);
     if (!occurrences) continue;
 
     // Occurrences per 100 tokens, capped so one keyword-stuffed passage cannot
     // dominate on a single term.
     const density = (occurrences / passageTokens) * 100;
-    total += Math.min(density, 2) / 2;
+    total += (Math.min(density, 2) / 2) * weight;
   }
-  return total / queryTerms.length;
+
+  // Every term equally common across candidates: lexical signal says nothing,
+  // so return 0 and let the vector score decide rather than inventing a tie-break.
+  return weightSum > 0 ? total / weightSum : 0;
 }
 
 export interface ScoredChunk extends RetrievedChunk {
@@ -148,9 +195,12 @@ export async function retrieve(
   );
 
   const qTerms = terms(question);
+  const normalised = candidates.map((c) => c.text.toLowerCase().replace(/[^a-z0-9\s-]/g, " "));
+  const idf = candidateIdf(qTerms, normalised);
+
   const scored: ScoredChunk[] = candidates
     .map((c) => {
-      const lexicalScore = lexicalRelevance(qTerms, c.text);
+      const lexicalScore = lexicalRelevance(qTerms, c.text, idf);
       return {
         ...c,
         vectorScore: c.score,

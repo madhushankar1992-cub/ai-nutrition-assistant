@@ -27,27 +27,47 @@ npm run eval                  # tsx --env-file=.env scripts/evaluate.ts — requ
                               # /api/chat 3x per question across the fixed 10-question dataset
                               # (data/eval-questions.json) plus an 8-case scope-abuse suite, then writes
                               # Docs/failure-log.md and EvalRun/FailureLogEntry rows to the DB.
+
+npm run eval:retrieval        # tsx scripts/evaluate-retrieval.ts — the Milestone 2 suite. Calls retrieve()
+                              # directly (no server needed) over data/retrieval-questions.json, reporting
+                              # recall@k, document_recall@k, false refusals and an 8-case adversarial suite,
+                              # then writes Docs/retrieval-report.md. Exits non-zero if adversarial < 100%.
 ```
 
-`DATABASE_URL` must point at a real Postgres instance even for local dev — `prisma/schema.prisma`'s datasource is `postgresql`, not SQLite (a leftover `prisma/dev.db` from earlier SQLite-based development exists but is not what the current schema uses).
+Corpus commands (these need `GROQ_API_KEY`, which lives in `.env.local`, not `.env` — hence the two
+`--env-file` flags already wired into the npm scripts):
+
+```bash
+npm run ingest               # scrape -> extract -> chunk -> embed -> upsert into pgvector. Writes logs/ingest-*.log
+npm run corpus:watch         # fetch each source and report drift; detects, never auto-updates
+npm run vectors              # inspect stored chunks and their embeddings
+```
+
+`DATABASE_URL` must point at a real Postgres instance even for local dev — `prisma/schema.prisma`'s datasource is `postgresql`, not SQLite (a leftover `prisma/dev.db` from earlier SQLite-based development exists but is not what the current schema uses). It must also have the **pgvector** extension available.
+
+**Never run `prisma db push` against a database holding chunks.** `Chunk.embedding` is a `vector(384)` column that Prisma cannot model, so `db push` diffs it against `schema.prisma`, does not find it, and drops it — silently emptying the index until a full re-ingest. This has happened once. Use `prisma migrate deploy`; the column is created by `prisma/migrations/20261003120000_chunk_embedding_vector`.
 
 ## Architecture
 
-Single Next.js 14 App Router app — one codebase serves both the frontend and the only backend route, `app/api/chat/route.ts` (`POST` + `DELETE`). There is no separate backend service.
+Single Next.js 14 App Router app — one codebase serves the frontend and the only backend route, `app/api/chat/route.ts` (`GET` + `POST` + `DELETE`). The same code runs on both hosts; what differs is one environment variable (see Deployment).
 
 **Request pipeline (`POST /api/chat`)**, in `app/api/chat/route.ts`:
-1. Validate the request body against `ChatRequestSchema` (`lib/schema.ts`).
-2. Load/create the `Conversation`, load its prior `Message` rows.
-3. Pre-call scope guard (`lib/scopeGuard.ts`'s `checkRequest`) — a **regex-based**, code-level check (not a classifier, not prompt-reliant) run against the last 6 turns of history plus the new message, so rephrased/indirect/split-across-turns restricted requests (calorie/macro targets, personal weight recommendations, condition-specific medical advice) are still caught. If blocked, the fixed `REFUSAL_MESSAGE` is returned and the LLM is never called.
-4. Call Groq (`lib/groq.ts`, model `openai/gpt-oss-120b` by default, override via `GROQ_MODEL`) using **Structured Outputs** (`response_format: { type: "json_schema", strict: true }`), not forced tool-calling — forced `tool_choice` was tried first but `gpt-oss` reasoning models intermittently emit chain-of-thought instead of a clean tool call under it, which Groq's tool-call parser then rejects with a 400. `json_schema` output lands in `message.content` as plain text instead, avoiding that parser.
-5. Validate the parsed response against `ChatResponseSchema`; one retry with an explicit correction turn on schema mismatch, else a 422 with a generic apology.
-6. Force every claim's `source` to `null` regardless of what the model returned (defense in depth against a prompt-injection or model slip fabricating a citation).
-7. Post-call scope guard (`checkResponse`) — regex scan of the generated answer for leaked numeric/medical content even if the pre-call check passed.
-8. Persist the assistant message + claims; respond with `{ conversationId, answer, claims[] }`.
+1. If `BACKEND_API_URL` is set, forward the whole request to that backend and return its response verbatim. Everything below then happens on the container, not here.
+2. Validate the request body against `ChatRequestSchema` (`lib/schema.ts`). Malformed JSON returns 400, not a throw.
+3. Load/create the `Conversation`, load its prior `Message` rows. History is keyed by `conversationId`, which is what keeps concurrent chat threads from seeing each other's turns.
+4. Pre-call scope guard (`lib/scopeGuard.ts`'s `checkRequest`) — a **regex-based**, code-level check (not a classifier, not prompt-reliant) run against the last 6 turns of history plus the new message, so rephrased/indirect/split-across-turns restricted requests (calorie/macro targets, personal weight recommendations, condition-specific medical advice) are still caught. If blocked, the fixed `REFUSAL_MESSAGE` is returned and neither retrieval nor the LLM runs. **This runs before retrieval deliberately**: a calorie request is refused on policy whether or not the corpus could answer it, and refusing here means it is never miscounted as a coverage gap in the retrieval metrics.
+5. Retrieve (`lib/retrieval.ts`). Embed the query with bge-small, over-fetch `k*4` candidates from pgvector, re-rank with IDF-weighted lexical density. An embedding or store failure is a **hard** failure returning 503 — there is deliberately no fallback path from "retrieval unavailable" to "answer from model knowledge".
+6. Sufficiency gate. If the best passages are too weak (`absoluteFloor` / `relevanceFloor` in `lib/retrievalConfig.ts`), return a not-in-corpus answer naming the documents searched, and never ask the model to write from thin material.
+7. Call Groq (`lib/groq.ts`, model `openai/gpt-oss-120b` by default, override via `GROQ_MODEL`) using **Structured Outputs** (`response_format: { type: "json_schema", strict: true }`), not forced tool-calling — forced `tool_choice` was tried first but `gpt-oss` reasoning models intermittently emit chain-of-thought instead of a clean tool call under it, which Groq's tool-call parser then rejects with a 400. `json_schema` output lands in `message.content` as plain text instead, avoiding that parser.
+8. Bind citations (`lib/citations.ts`). The model emits `{text, chunkId}`; the server looks each `chunkId` up among the chunks retrieved **for this request** and builds the citation from the database row. A claim whose `chunkId` was not retrieved is **dropped**. This is what makes a fabricated citation structurally impossible — the model selects, the server cites.
+9. Post-call scope guard (`checkResponse`) — regex scan of the generated answer for leaked numeric/medical content even if the pre-call check passed.
+10. Persist the assistant message + claims; respond with `{ conversationId, answer, claims[], retrieval }`.
 
-`DELETE /api/chat?conversationId=` cascades claims → messages → the conversation itself (application-level cascade, not DB-level).
+`GET /api/chat` returns service status — API, database and corpus counts, plus whether `GROQ_API_KEY` is configured (never any part of its value). It exists because this URL is the first thing anyone opens when checking the backend, and a bare 405 reads as an outage.
 
-**The `{conversationId, answer, claims[]}` response shape is intentionally frozen** — `ClaimSchema.source` (`lib/schema.ts`) is `z.null()` for the whole of Milestone 1 and is meant to widen to `z.string().url().nullable()` in Milestone 2 (real retrieval/citations) without any field rename or shape change. Don't treat `source: null` as a placeholder to delete; `SourcesPanel` (`components/SourcesPanel.tsx`) already has the populated-source rendering branch written and unreachable, waiting for M2.
+`DELETE /api/chat?conversationId=` cascades claims → messages → the conversation itself (application-level cascade, not DB-level). It never touches `Document` or `Chunk`: those are corpus data, not user data.
+
+**The `{conversationId, answer, claims[]}` response shape has been stable since Milestone 1.** `ClaimSchema.source` widened from `z.null()` to a `Citation` object when real retrieval landed, with no field rename or shape change; `retrieval` was added alongside, so an M1 client keeps working and simply ignores it. Note the two-schema split in `lib/schema.ts`: `LlmClaimSchema` (`{text, chunkId}`) is what the model may emit, `ClaimSchema` (`{text, source}`) is what the API returns.
 
 **Schema sharing**: `lib/schema.ts`'s Zod schemas are the single source of truth — converted via `zod-to-json-schema` into Groq's `response_format.json_schema.schema`, and reused as-is to validate both the incoming request and the parsed LLM response.
 
@@ -55,10 +75,20 @@ Single Next.js 14 App Router app — one codebase serves both the frontend and t
 
 **Frontend**: `app/page.tsx` renders a single client component, `ChatWindow` (`components/ChatWindow.tsx`), which owns all state via plain `useState` (no external state library) keyed by `conversationId`. It composes `MessageBubble` (assistant bubbles are clickable/selectable), `ChatInput`, and `SourcesPanel` (claims for the currently *selected* assistant message; hidden below the `md` breakpoint). The client never calls Groq directly and never sees `GROQ_API_KEY`.
 
-**Data model** (`prisma/schema.prisma`): `Conversation` → `Message` → `Claim`, plus `EvalRun` and `FailureLogEntry` used only by `scripts/evaluate.ts`. `EvalRun.promptVersion` is `sha256(SYSTEM_PROMPT).slice(0,10)` — failure counts are grouped by `(promptVersion, category)` so prompt-iteration regressions are comparable over time.
+**Retrieval corpus** (`lib/corpus/`): `sources.ts` is the registry of which documents may be cited, with `expectTitleContains`/`expectYearIn` edition guards — two candidates once returned HTTP 200 while being the *wrong edition*, which would be a fabricated citation behind a working link. `fetcher.ts` → `extract.ts` → `chunker.ts` → `embeddings.ts` → `vectorStore.ts` is the ingestion chain, driven by `scripts/ingest.ts` and by `.github/workflows/corpus-ingest.yml` on cron `45 3 * * *` (03:45 UTC = 09:15 IST).
 
-**Deployment — two live targets sharing one database, and they behave differently**: the app is deployed to both Vercel (`https://ai-nutrition-assistant-self.vercel.app`) and Railway (`https://app-production-3fe4f.up.railway.app`), both pointed at the same Railway-hosted Postgres `DATABASE_URL`. **Railway auto-deploys on push to the linked GitHub branch; Vercel does not** — its GitHub connection was never actually linked (`vercel link`/`git connect` require a one-time dashboard OAuth step), so Vercel deploys only happen via `vercel --prod` run manually from this repo. A `git push` alone updates Railway and GitHub but **not** the live Vercel URL — don't assume otherwise when verifying a change went live. See `Docs/deployment-plan.md` §9 ("What Actually Happened") for the full list of deploy-time gotchas (Railway port-binding, migration generation workaround, etc.).
+Two things in that chain are easy to get wrong and are load-bearing:
+- **HTML sources need their site chrome stripped** (`isolateMainContent` + `CHROME_TAGS` in `extract.ts`). Without it the WHO fact sheet ingested as 7 chunks of which 6 were navigation menus, and the one real chunk ranked 27th on a question only it could answer.
+- **Bibliographies and contents pages are classified and never retrieved** (`classifyNonProse` in `chunker.ts`, excluded in `queryChunks`'s WHERE clause). They are built from the same vocabulary as the chapters they index, so they match those chapters' questions while being unable to answer any.
 
-**System prompt** (`lib/systemPrompt.ts`): exports `SYSTEM_PROMPT`, a single template string defining the assistant's persona ("Sage"), answer style (concise, ~150 words, no padding/hedging, answer only what was asked — added specifically so repeated identical questions get comparable answers across the 3x eval runs), the claims-decomposition instruction, and the same out-of-scope categories as the code-level `scopeGuard` (defense in depth — the prompt is not relied on alone).
+**Data model** (`prisma/schema.prisma`): `Conversation` → `Message` → `Claim`, plus the corpus tables `Document` → `Chunk`, `CorpusSource`, `CorpusSnapshot`, `ScrapeRun`, and `EvalRun`/`FailureLogEntry` used by the eval scripts. `EvalRun.promptVersion` is `sha256(SYSTEM_PROMPT).slice(0,10)` — failure counts are grouped by `(promptVersion, category)` so prompt-iteration regressions are comparable over time. Every `Chunk` also stores `configHash`, so chunks produced by a superseded retrieval config can be detected and removed rather than silently mixed with current ones.
+
+**Deployment — two live targets sharing one database, with different jobs.** The app is deployed to both Vercel (`https://ai-nutrition-assistant-self.vercel.app`) and Railway (`https://app-production-3fe4f.up.railway.app`), both pointed at the same Railway-hosted Postgres `DATABASE_URL`.
+
+*They are not interchangeable.* Retrieval embeds the query locally with bge-small — roughly 130 MB of ONNX weights — which loads in Railway's long-running container and **cannot** load in a Vercel serverless function, where it failed every single retrieval. So Vercel serves the UI and forwards `/api/chat` to the container via the `BACKEND_API_URL` env var. That forwarding lives **inside the route handler**, not in `next.config.js`: a `rewrites()` entry was tried first and silently did nothing, because Next gives filesystem routes precedence over rewrites and `app/api/chat/route.ts` always won.
+
+**Railway auto-deploys on push to the linked GitHub branch; Vercel does not** — its GitHub connection was never actually linked (`vercel link`/`git connect` require a one-time dashboard OAuth step), so Vercel deploys only happen via `vercel --prod` run manually from this repo. A `git push` alone updates Railway and GitHub but **not** the live Vercel URL — don't assume otherwise when verifying a change went live. Note also that Railway's `redeploy` re-runs the last build; use `railway up --ci` to build from current source. See `Docs/deployment-plan.md` §9 ("What Actually Happened") for the full list of deploy-time gotchas.
+
+**System prompt** (`lib/systemPrompt.ts`): exports `SYSTEM_PROMPT` and `SYSTEM_PROMPT_RAG`, defining the assistant's persona ("Sage"), answer style (concise, ~150 words, no padding/hedging, answer only what was asked — added specifically so repeated identical questions get comparable answers across the 3x eval runs), the claims-decomposition instruction, a `TOPIC_RESTRICTION` limiting answers to food and nutrition, and the same out-of-scope categories as the code-level `scopeGuard` (defense in depth — the prompt is not relied on alone).
 
 See `Docs/rag-architecture.md` for the full as-built design (this supersedes the original pre-build plan where the two diverge) and `Docs/deployment-plan.md` for deployment specifics.

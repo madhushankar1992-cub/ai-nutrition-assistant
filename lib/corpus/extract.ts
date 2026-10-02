@@ -131,17 +131,93 @@ function collectYears(text: string): number[] {
   return [...found].sort((a, b) => a - b);
 }
 
+/**
+ * Elements that are page furniture on every site, never document content.
+ *
+ * Measured cost of not removing these: the WHO fact sheet ingested as 7 chunks
+ * of which 6 were pure navigation — "Skip to main content Global Regions ...
+ * Dengue Endometriosis Mpox", "Cybersecurity Ethics Information disclosure".
+ * Such chunks embed happily, match any food query weakly, and crowd real
+ * passages out of the top-k. The single chunk holding actual guidance ranked
+ * 27th on a question that only it could answer.
+ */
+const CHROME_TAGS = [
+  "nav", "header", "footer", "aside", "form", "svg", "button",
+  "select", "dialog", "iframe", "template",
+];
+
+/** Below this, assume the content container was guessed wrong and use the page. */
+const HTML_MAIN_MIN_WORDS = 50;
+
+/**
+ * Prefix marking a line that was a real <h1>-<h6> in the source HTML, so the
+ * chunker can take the document's own section structure instead of inferring
+ * one from capitalisation. Chosen to be absent from running prose.
+ */
+export const HTML_HEADING_MARKER = "[[H]] ";
+
+const stripTags = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * Narrow to the document's content container before stripping anything else.
+ *
+ * Only an UNAMBIGUOUS container is used — exactly one <main> or one <article>
+ * in the page. With more than one there is no way to tell content from a
+ * sidebar teaser without a real DOM, and guessing wrong silently deletes the
+ * document. Every HTML source in this corpus has exactly one: gov.uk uses
+ * <main id="content">, who.int uses <article class="sf-detail-body-wrapper">.
+ */
+function isolateMainContent(html: string): string {
+  for (const tag of ["main", "article"]) {
+    const opens = html.match(new RegExp(`<${tag}[\\s>]`, "gi")) ?? [];
+    if (opens.length !== 1) continue;
+
+    const matched = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*)</${tag}>`, "i"));
+    if (!matched) continue;
+
+    // Accept only if real text survives — a wrong container is worse than none.
+    if (countWords(stripTags(matched[1])) >= HTML_MAIN_MIN_WORDS) return matched[1];
+  }
+  return html;
+}
+
 function htmlToText(html: string): { text: string; title: string | null } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? decodeEntities(titleMatch[1]).trim() || null : null;
 
+  // Scripts and comments go first: a <nav> mentioned inside a script string
+  // would otherwise unbalance the chrome removal below.
+  let body = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+
+  body = isolateMainContent(body);
+  for (const tag of CHROME_TAGS) {
+    body = body.replace(new RegExp(`<${tag}[\\s>][\\s\\S]*?</${tag}>`, "gi"), " ");
+  }
+
+  // Mark real <h1>-<h6> headings before the tags are discarded.
+  //
+  // Section detection on a PDF has to guess from typography, and that guess
+  // then ran on HTML too, where the answer is already in the markup. It guessed
+  // wrong: "Salt/sodium and potassium" failed the title-case test (one of its
+  // two long words is lowercase), so the WHO passage stating the 5 g salt limit
+  // was filed under the preceding heading, "Protein" — a citation pointing the
+  // reader at the wrong section of the document.
+  body = body.replace(
+    /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi,
+    (_, inner: string) => `\n${HTML_HEADING_MARKER}${stripTags(inner)}\n`
+  );
+
   const text = decodeEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<\/(p|div|li|tr|h[1-6]|section|article)>/gi, "\n")
+    body
+      // A block element opens a new line as well as closing one, so text is
+      // never glued to the paragraph above it — section detection reads lines.
+      .replace(/<(p|div|section|li|tr)\b[^>]*>/gi, "\n")
+      .replace(/<\/(p|div|li|tr|h[1-6]|section|article|blockquote)>/gi, "\n")
+      .replace(/<\/(td|th)>/gi, " ")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
   )

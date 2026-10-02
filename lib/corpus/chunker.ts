@@ -13,14 +13,49 @@
 //                                      the same text belong to two sections
 //   4. Carry the heading onto every piece - the reader lands in the right place
 
-import type { ExtractedPage, ExtractionResult } from "./extract";
+import { HTML_HEADING_MARKER, type ExtractedPage, type ExtractionResult } from "./extract";
 
 export const CHUNK_TARGET_TOKENS = 500;
 export const CHUNK_HARD_CAP_TOKENS = 900;
 export const CHUNK_OVERLAP_TOKENS = 80;
 export const MIN_CHUNK_TOKENS = 120;
 
-export type ChunkKind = "prose" | "table";
+export type ChunkKind = "prose" | "table" | "references" | "toc";
+
+// --- Non-answering chunks --------------------------------------------------
+// A reference list and a table of contents are made of the same words as the
+// chapters they point at, so they match those chapters' questions — but they
+// can never answer one. Measured: on "What is the dietary fibre reference value
+// for adults?" three EFSA *bibliography* chunks took ranks 2-4, pushing out the
+// passage that states 25 g/day. The contents page did the same for vitamin C.
+//
+// Both thresholds below are measured against the real corpus, not guessed. The
+// separation is wide, which is why a plain threshold is enough:
+//   citations per 100 words — 6 reference chunks score 4.8-12.6, everything
+//                             else in the corpus scores <= 1.8
+//   dot leaders per 100 words — 5 contents chunks score 7.7-31.1, every other
+//                             chunk scores exactly 0
+const DOT_LEADER = /\.{4,}/g;
+const CITATION =
+  /(\bdoi\b|doi\.org|\bet al\b|EFSA Journal|\bpp\.|\bvol\.|\bISBN\b|https?:\/\/|\b\d{4};\s?\d+|\(\d{4}\)|\b\d{4}\.\s)/gi;
+
+/** Citations per 100 words above which a chunk is a bibliography. */
+export const REFERENCES_CITATION_DENSITY = 3.0;
+/** Dot leaders per 100 words above which a chunk is a contents listing. */
+export const TOC_LEADER_DENSITY = 1.0;
+
+export function classifyNonProse(text: string): "references" | "toc" | null {
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  if (words < 20) return null;
+
+  const leaders = ((text.match(DOT_LEADER) ?? []).length / words) * 100;
+  if (leaders >= TOC_LEADER_DENSITY) return "toc";
+
+  const citations = ((text.match(CITATION) ?? []).length / words) * 100;
+  if (citations >= REFERENCES_CITATION_DENSITY) return "references";
+
+  return null;
+}
 
 export interface Chunk {
   ordinal: number;
@@ -143,6 +178,12 @@ interface DetectedHeading {
 function detectHeading(line: string): DetectedHeading | null {
   const s = line.trim();
   if (!s) return null;
+
+  // An HTML source states its own headings; never second-guess the markup.
+  if (s.startsWith(HTML_HEADING_MARKER.trim())) {
+    const text = s.slice(HTML_HEADING_MARKER.trim().length).trim();
+    return text ? { text, confidence: "outline" } : null;
+  }
 
   const numbered = s.match(NUMBERED_HEADING);
   if (numbered) return { text: s, confidence: "numbered" };
@@ -280,8 +321,13 @@ export function chunkDocument(
   // minimum. Normalising first makes the guard measure the same thing it guards.
   const bufferTokens = () => estimateTokens(splitIntoParagraphs(buffer.join("\n")).join("\n\n"));
 
+  // A heading line stays in the buffer when the section before it was too short
+  // to close (see below), so the marker has to come off the emitted text.
+  const stripMarkers = (s: string) =>
+    s.split("\n").map((l) => l.replace(HTML_HEADING_MARKER.trim() + " ", "")).join("\n");
+
   const flushBuffer = () => {
-    const text = buffer.join("\n").trim();
+    const text = stripMarkers(buffer.join("\n")).trim();
     buffer = [];
     if (!text) return;
 
@@ -318,7 +364,7 @@ export function chunkDocument(
         page: bufferPage,
         text: piece,
         tokenCount,
-        kind: "prose",
+        kind: classifyNonProse(piece) ?? "prose",
         oversized: tokenCount > CHUNK_HARD_CAP_TOKENS,
         restricted: isRestricted(piece),
       });
@@ -342,7 +388,9 @@ export function chunkDocument(
           page: page.pageNumber,
           text,
           tokenCount,
-          kind: "table",
+          // A contents page is dense with digits and short on sentences, so it
+          // can reach this branch by looking like a table. Check it here too.
+          kind: classifyNonProse(text) ?? "table",
           oversized: tokenCount > CHUNK_HARD_CAP_TOKENS,
           restricted: isRestricted(text),
         });

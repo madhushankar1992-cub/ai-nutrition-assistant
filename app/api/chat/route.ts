@@ -6,6 +6,7 @@ import { generateGroundedAnswer, type ConversationTurn } from "@/lib/groq";
 import { formatPassages, retrieve } from "@/lib/retrieval";
 import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
+import { storeStats } from "@/lib/corpus/vectorStore";
 
 // Groq calls retry with backoff on rate limits, and a grounded request also
 // embeds the query and hits the vector store first. Hobby plan max is 60s.
@@ -220,6 +221,46 @@ export async function POST(req: NextRequest) {
       configVersion: RETRIEVAL_CONFIG_HASH,
     },
   });
+}
+
+/**
+ * GET /api/chat — service status.
+ *
+ * The chat endpoint answers POST, so opening it in a browser used to return a
+ * bare 405 that reads as an outage ("This page isn't working right now"). It is
+ * the URL anyone checking the backend tries first, so it answers with what they
+ * are actually asking: whether the API, the database and the corpus are up.
+ *
+ * Deliberately exposes no secrets and no conversation data — only whether the
+ * key is configured, never any part of its value.
+ */
+export async function GET(req: NextRequest) {
+  if (BACKEND_API_URL) return proxyToBackend(req);
+
+  const body: Record<string, unknown> = {
+    service: "ai-nutrition-assistant",
+    endpoint: "/api/chat",
+    usage: "POST { message: string, conversationId?: string, documentKey?: string }",
+    retrievalConfig: RETRIEVAL_CONFIG_HASH,
+    groqConfigured: Boolean(process.env.GROQ_API_KEY),
+  };
+
+  // A corpus count is the one check that proves the whole retrieval path is
+  // live: extension, embedding column and index all have to exist to answer it.
+  try {
+    const stats = await storeStats();
+    return NextResponse.json({ ...body, status: "ok", corpus: stats });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        ...body,
+        status: "degraded",
+        corpus: null,
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 503 }
+    );
+  }
 }
 
 /**

@@ -8,10 +8,15 @@
 //
 // So the hosts take different jobs, which is what the deployment plan called
 // for: Vercel serves the UI, and the container serves the API. When
-// BACKEND_API_URL is set, Vercel proxies /api/chat to it instead of trying to
+// BACKEND_API_URL is set, Vercel forwards /api/chat to it instead of trying to
 // run it. Leave it unset and the app serves its own API, which is what the
 // container does.
-const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace(/\/$/, "");
+//
+// That forwarding is NOT configured here. A `rewrites()` entry for /api/chat
+// was tried and silently did nothing: Next gives filesystem routes precedence
+// over rewrites, so app/api/chat/route.ts always won and every request was
+// still served by the serverless function that cannot load the model. The
+// forwarding therefore lives inside the route handler itself.
 
 const nextConfig = {
   experimental: {
@@ -26,11 +31,6 @@ const nextConfig = {
       config.externals = [...(config.externals ?? []), "onnxruntime-node", "sharp"];
     }
     return config;
-  },
-
-  async rewrites() {
-    if (!BACKEND_API_URL) return [];
-    return [{ source: "/api/chat", destination: `${BACKEND_API_URL}/api/chat` }];
   },
 };
 

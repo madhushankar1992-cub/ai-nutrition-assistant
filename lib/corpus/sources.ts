@@ -38,15 +38,23 @@ export interface CorpusSourceDef {
 export const CORPUS_SOURCES: CorpusSourceDef[] = [
   {
     key: "who-healthy-diet-factsheet",
-    name: "Healthy diet (Fact sheet No. 394)",
+    name: "Healthy diet (fact sheet)",
     publisher: "World Health Organization",
-    year: 2018,
-    url: "https://www.who.int/publications/m/item/healthy-diet-factsheet394",
-    fileUrl: "https://www.who.int/publications/m/item/healthy-diet-factsheet394",
+    year: 2026,
+    // Was /publications/m/item/healthy-diet-factsheet394 — a publication STUB
+    // carrying only a 700-word overview and a download link. It fetched 200 and
+    // read as a plausible document, so nothing flagged it, but the numbers the
+    // corpus needs were simply not in it: "400 g fruit and vegetables" never
+    // appeared, and the fruit/veg question could not be answered from any
+    // document. The news-room fact sheet is the full text (3,000 words) and is
+    // the edition WHO currently maintains.
+    url: "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
+    fileUrl: "https://www.who.int/news-room/fact-sheets/detail/healthy-diet",
     acquisition: "fetched",
     expectTitleContains: "Healthy diet",
     enabled: true,
-    notes: "Densest population-level numbers per page: >=400 g fruit/veg, fat <30%E, salt <5 g/day.",
+    notes:
+      "Updated 26 Jan 2026. Densest population-level numbers in the corpus: >=400 g fruit/veg, free sugars <10%E, salt <5 g/day (2 g sodium), fibre >=25 g. Mentions a 2,000-calorie reference, so chunks here can be flagged restricted.",
   },
   {
     key: "efsa-drv-summary",
