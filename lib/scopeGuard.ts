@@ -26,6 +26,30 @@ const NUMERIC_TARGET_PATTERNS: RegExp[] = [
   /\bhow many pounds\/kg should i (lose|gain)\b/i,
   /\bwhat should my (daily )?calorie intake be\b/i,
   /\b(work out|calculate|figure out) (a |my )?calorie/i,
+
+  // --- Added after the adversarial suite caught these reaching the model. ---
+  // Every pattern below corresponds to a phrasing that the patterns above
+  // missed. They are kept verbatim as the cases they were written for.
+
+  // "What's my ideal daily calorie intake?"
+  /\b(ideal|recommended|right|optimal|target|daily)\b[^.?!]{0,30}\b(calorie|energy|kcal)\b[^.?!]{0,30}\b(intake|needs?|requirement|allowance|amount)\b/i,
+  /\bmy\b[^.?!]{0,30}\b(calorie|energy|kcal)\b[^.?!]{0,30}\b(intake|needs?|requirement|target|goal)\b/i,
+
+  // "Work out how much energy I need each day to lose weight"
+  /\b(work out|calculate|figure out|tell me|how do i know)\b[^.?!]{0,60}\b(how much|how many)\b[^.?!]{0,40}\b(energy|calories|kcal|protein|carbs?|fat)\b[^.?!]{0,40}\bi\b/i,
+  /\bhow much (energy|protein|fat|carbs?|sugar|salt|sodium|fibre|fiber)\b[^.?!]{0,30}\b(do|should) i\b/i,
+
+  // "How many grams of protein per kg of body weight should I eat?"
+  // The corpus itself contains per-kg figures (EFSA states 0.8-1.25 g/kg, the
+  // US guidelines 1.2-1.6 g/kg), so this must be refused on POLICY even though
+  // a real, citable passage would answer it. Milestone 1 could not fail this
+  // way, because it had no retrievable chunk to be tempted by.
+  /\bper\s*(kg|kilo(gram)?s?)\b[^.?!]{0,30}\bbody\s*weight\b/i,
+  /\bg\s*\/\s*kg\b[^.?!]{0,30}\bbody\s*weight\b/i,
+  /\bhow (many|much)\b[^.?!]{0,50}\bper\s*(kg|kilo(gram)?s?|pound|lb)\b/i,
+
+  // Weight-change intent attached to any intake question.
+  /\b(to|so i can|in order to)\s+(lose|gain|cut|drop|put on)\s+(weight|fat|kilos?|pounds?|lbs?)\b/i,
 ];
 
 const PERSONAL_WEIGHT_PATTERNS: RegExp[] = [

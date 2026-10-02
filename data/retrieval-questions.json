@@ -1,0 +1,123 @@
+[
+  {
+    "id": "rq01-fsa-leftovers",
+    "question": "How long can I keep cooked leftovers in the fridge?",
+    "expectSourceKey": "fsa-chill-freeze-defrost",
+    "expectText": "48 hours",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq02-fsa-fridge-temp",
+    "question": "What temperature should a domestic fridge be set to?",
+    "expectSourceKey": "fsa-chill-freeze-defrost",
+    "expectText": "0 and 5",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq03-fsa-freezer-temp",
+    "question": "What temperature should a freezer be kept at?",
+    "expectSourceKey": "fsa-chill-freeze-defrost",
+    "expectText": "-18",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq04-fsa-cooling-time",
+    "question": "How quickly should cooked food be put in the fridge after cooking?",
+    "expectSourceKey": "fsa-chill-freeze-defrost",
+    "expectText": "two hours",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq05-fsa-defrost",
+    "question": "How long can defrosted food be kept before using it?",
+    "expectSourceKey": "fsa-chill-freeze-defrost",
+    "expectText": "24 hours",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq06-who-fruit-veg",
+    "question": "How many grams of fruit and vegetables should be eaten each day?",
+    "expectSourceKey": "who-healthy-diet-factsheet",
+    "expectText": "400",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq07-who-free-sugars",
+    "question": "What proportion of energy should come from free sugars?",
+    "expectSourceKey": "who-healthy-diet-factsheet",
+    "expectText": "10%",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq08-who-salt",
+    "question": "What is the recommended daily limit for salt intake?",
+    "expectSourceKey": "who-healthy-diet-factsheet",
+    "expectText": "5 g",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq09-who-sodium",
+    "question": "What does WHO recommend as a sodium limit for adults?",
+    "expectSourceKey": "who-sodium-guideline",
+    "expectText": "sodium",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq10-who-five-keys",
+    "question": "What are the five keys to safer food?",
+    "expectSourceKey": "who-five-keys",
+    "expectText": "keys",
+    "category": "food_safety_storage"
+  },
+  {
+    "id": "rq11-eatwell-saturated-fat",
+    "question": "How much saturated fat should be eaten per day according to UK guidance?",
+    "expectSourceKey": "phe-eatwell-guide",
+    "expectText": "30g",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq12-eatwell-five-a-day",
+    "question": "How many portions of fruit and vegetables a day does the Eatwell Guide recommend?",
+    "expectSourceKey": "phe-eatwell-guide",
+    "expectText": "5",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq13-dga-sodium",
+    "question": "What sodium limit do the US dietary guidelines give?",
+    "expectSourceKey": "dga-2025-2030",
+    "expectText": "2,300",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq14-dga-protein-foods",
+    "question": "What protein foods do the US dietary guidelines say to prioritise?",
+    "expectSourceKey": "dga-2025-2030",
+    "expectText": "protein",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq15-efsa-fibre",
+    "question": "What is the dietary fibre reference value for adults?",
+    "expectSourceKey": "efsa-drv-summary",
+    "expectText": "25 g",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq16-efsa-vitamin-c",
+    "question": "What is the population reference intake for vitamin C in adults?",
+    "expectSourceKey": "efsa-drv-summary",
+    "expectText": "vitamin C",
+    "category": "nutrient_requirements"
+  },
+  {
+    "id": "rq17-crossdoc-salt",
+    "question": "How much salt should adults eat per day?",
+    "expectSourceKey": "any",
+    "expectMultipleDocuments": true,
+    "expectText": "salt",
+    "category": "cross_document",
+    "note": "Deliberate overlap: PHE gives 6g salt, the US guidelines give 2,300mg sodium. Both must appear, attributed, with no winner picked."
+  }
+]

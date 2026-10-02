@@ -43,19 +43,39 @@ function terms(text: string): string[] {
 }
 
 /**
- * Fraction of the question's distinctive words present in the passage.
- * Deliberately simple and inspectable — this is a tie-breaker, not a ranker.
+ * Lexical relevance by term DENSITY, not presence.
+ *
+ * Binary presence was tried first and failed in a specific, measurable way:
+ * every top candidate scored 1.000 because the HTML chunks were large enough
+ * (up to 757 tokens) to contain all of "fridge", "keep", "long" and
+ * "leftovers" somewhere, even when the passage was about fridge power
+ * settings. A metric that saturates cannot rank.
+ *
+ * Density fixes that: a passage mentioning "leftovers" twice in 200 tokens
+ * beats one mentioning it once in 700. Scores are normalised per 100 tokens
+ * and averaged over the query's distinctive terms, so a passage must be about
+ * the question rather than merely contain its words.
  */
-function lexicalOverlap(queryTerms: string[], passage: string): number {
+function lexicalRelevance(queryTerms: string[], passage: string): number {
   if (!queryTerms.length) return 0;
-  const haystack = " " + passage.toLowerCase() + " ";
-  let hits = 0;
-  for (const t of queryTerms) {
-    // Stem crudely: "leftovers" should match "leftover".
-    const stem = t.replace(/(ies|es|s)$/, "");
-    if (haystack.includes(t) || (stem.length > 3 && haystack.includes(stem))) hits++;
+
+  const haystack = " " + passage.toLowerCase().replace(/[^a-z0-9\s-]/g, " ") + " ";
+  const passageTokens = Math.max(1, haystack.split(/\s+/).length);
+
+  let total = 0;
+  for (const term of queryTerms) {
+    // Crude stemming: "leftovers" should match "leftover".
+    const stem = term.replace(/(ies|es|s)$/, "");
+    const needle = stem.length > 3 ? stem : term;
+    const occurrences = haystack.split(needle).length - 1;
+    if (!occurrences) continue;
+
+    // Occurrences per 100 tokens, capped so one keyword-stuffed passage cannot
+    // dominate on a single term.
+    const density = (occurrences / passageTokens) * 100;
+    total += Math.min(density, 2) / 2;
   }
-  return hits / queryTerms.length;
+  return total / queryTerms.length;
 }
 
 export interface ScoredChunk extends RetrievedChunk {
@@ -130,7 +150,7 @@ export async function retrieve(
   const qTerms = terms(question);
   const scored: ScoredChunk[] = candidates
     .map((c) => {
-      const lexicalScore = lexicalOverlap(qTerms, c.text);
+      const lexicalScore = lexicalRelevance(qTerms, c.text);
       return {
         ...c,
         vectorScore: c.score,

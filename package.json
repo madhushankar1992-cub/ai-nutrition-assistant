@@ -12,15 +12,14 @@
     "prisma:migrate": "prisma migrate dev",
     "eval": "tsx --env-file=.env scripts/evaluate.ts",
     "test:scope": "tsx scripts/test-scope-guard.ts",
-    "corpus:watch": "tsx --env-file-if-exists=.env.local scripts/watch-corpus.ts",
-    "ingest": "tsx --env-file-if-exists=.env.local scripts/ingest.ts",
-    "corpus:ingest": "tsx --env-file-if-exists=.env.local scripts/ingest.ts",
-    "vectors": "tsx --env-file-if-exists=.env.local --env-file=.env scripts/inspect-vectors.ts"
+    "corpus:watch": "tsx --env-file=.env --env-file-if-exists=.env.local scripts/watch-corpus.ts",
+    "ingest": "tsx --env-file=.env --env-file-if-exists=.env.local scripts/ingest.ts",
+    "vectors": "tsx --env-file=.env --env-file-if-exists=.env.local scripts/inspect-vectors.ts",
+    "eval:retrieval": "tsx --env-file=.env --env-file-if-exists=.env.local scripts/evaluate-retrieval.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.0",
     "@prisma/client": "^5.22.0",
-    "chromadb": "^3.5.0",
     "groq-sdk": "^1.6.0",
     "next": "^14.2.35",
     "react": "^18.3.1",

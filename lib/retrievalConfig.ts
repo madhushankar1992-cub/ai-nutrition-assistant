@@ -31,9 +31,21 @@ export const RETRIEVAL_CONFIG = {
   indexType: "hnsw-cosine",
   k: 5,
 
-  // Sufficiency gate — calibrated against the question bank, not guessed.
-  absoluteFloor: 0.30,
-  relevanceFloor: 0.35,
+  // Sufficiency gate — CALIBRATED against the question bank, not guessed.
+  //
+  // Measured separation on the real corpus:
+  //   off-corpus   "best wine with lamb"      0.338
+  //   off-corpus   "ferment kimchi at home"   0.450
+  //   ---- threshold 0.55 ----
+  //   in-corpus    "salt per day"             0.698
+  //   in-corpus    "fibre reference value"    0.733
+  //   in-corpus    "leftovers in the fridge"  0.796
+  //   in-corpus    "fridge temperature"       0.857
+  //
+  // 0.55 sits in the gap with margin on both sides. Re-calibrate whenever the
+  // chunking or embedding model changes, because both move these scores.
+  absoluteFloor: 0.50,
+  relevanceFloor: 0.55,
 } as const;
 
 export type RetrievalConfig = typeof RETRIEVAL_CONFIG;

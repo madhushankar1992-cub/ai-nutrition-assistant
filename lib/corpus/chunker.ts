@@ -165,7 +165,7 @@ function splitIntoParagraphs(text: string): string[] {
 }
 
 /** Split an over-cap section on paragraph boundaries, with overlap. */
-function splitLongSection(paragraphs: string[]): string[] {
+function splitLongSection(paragraphs: string[], target: number): string[] {
   const pieces: string[] = [];
   let current: string[] = [];
   let currentTokens = 0;
@@ -189,7 +189,7 @@ function splitLongSection(paragraphs: string[]): string[] {
       let bufTokens = 0;
       for (const sentence of sentences) {
         const t = estimateTokens(sentence);
-        if (bufTokens + t > CHUNK_TARGET_TOKENS && buf.length) {
+        if (bufTokens + t > target && buf.length) {
           pieces.push(buf.join("").trim());
           buf = [];
           bufTokens = 0;
@@ -201,7 +201,7 @@ function splitLongSection(paragraphs: string[]): string[] {
       continue;
     }
 
-    if (currentTokens + paraTokens > CHUNK_TARGET_TOKENS && current.length) {
+    if (currentTokens + paraTokens > target && current.length) {
       flush();
       // Overlap: carry the tail of the previous piece into the next one, so a
       // sentence straddling the boundary survives in at least one chunk.
@@ -239,7 +239,21 @@ export interface ChunkOptions {
   tablePages?: number[];
   /** Section used before the first heading is seen. */
   defaultSection?: string;
+  /**
+   * Override the chunk target. HTML sources need a smaller one.
+   *
+   * A PDF gives page breaks, which act as natural topic boundaries. An HTML
+   * page is one continuous run, so a 500-token chunk there routinely spans
+   * several unrelated topics — measured: the FSA guidance produced 757-token
+   * chunks covering fridge settings, freezer burn and leftovers at once. Every
+   * such chunk then contains every query term, which destroys ranking: the
+   * right passage cannot outscore the wrong one on either vector or keyword.
+   */
+  targetTokens?: number;
 }
+
+/** HTML has no page breaks to chunk on, so it needs a tighter target. */
+export const HTML_CHUNK_TARGET_TOKENS = 220;
 
 export function chunkDocument(
   extraction: ExtractionResult,
@@ -250,6 +264,9 @@ export function chunkDocument(
   const chunks: Chunk[] = [];
 
   const boilerplate = findBoilerplate(extraction.pages as ExtractedPage[]);
+  const target =
+    options.targetTokens ??
+    (extraction.kind === "html" ? HTML_CHUNK_TARGET_TOKENS : CHUNK_TARGET_TOKENS);
 
   let section = options.defaultSection ?? "Introduction";
   let sectionConfidence = "inherited";
@@ -272,8 +289,12 @@ export function chunkDocument(
     if (!paragraphs.length) return;
 
     const total = estimateTokens(text);
+    // Split once the section exceeds its target, not only at the hard cap —
+    // otherwise an HTML section of 700 tokens stayed whole despite a 220 target.
     const pieces =
-      total <= CHUNK_HARD_CAP_TOKENS ? [paragraphs.join("\n\n")] : splitLongSection(paragraphs);
+      total <= Math.max(target, MIN_CHUNK_TOKENS * 2)
+        ? [paragraphs.join("\n\n")]
+        : splitLongSection(paragraphs, target);
 
     // Merge runt pieces forward rather than emitting them: a 40-token chunk
     // retrieves on noise and cannot carry a checkable claim.
