@@ -256,7 +256,12 @@ export function chunkDocument(
   let buffer: string[] = [];
   let bufferPage = 1;
 
-  const bufferTokens = () => estimateTokens(buffer.join("\n"));
+  // Measure the buffer AFTER whitespace normalisation, because that is what the
+  // emitted chunk contains. Measuring the raw buffer over-counted badly on HTML
+  // sources — indentation and blank lines inflated the estimate, so a "130
+  // token" buffer became a 40-token chunk and 19% of chunks landed under the
+  // minimum. Normalising first makes the guard measure the same thing it guards.
+  const bufferTokens = () => estimateTokens(splitIntoParagraphs(buffer.join("\n")).join("\n\n"));
 
   const flushBuffer = () => {
     const text = buffer.join("\n").trim();
@@ -270,7 +275,19 @@ export function chunkDocument(
     const pieces =
       total <= CHUNK_HARD_CAP_TOKENS ? [paragraphs.join("\n\n")] : splitLongSection(paragraphs);
 
+    // Merge runt pieces forward rather than emitting them: a 40-token chunk
+    // retrieves on noise and cannot carry a checkable claim.
+    const merged: string[] = [];
     for (const piece of pieces) {
+      const prev = merged[merged.length - 1];
+      if (prev && estimateTokens(prev) < MIN_CHUNK_TOKENS) {
+        merged[merged.length - 1] = prev + "\n\n" + piece;
+      } else {
+        merged.push(piece);
+      }
+    }
+
+    for (const piece of merged) {
       const tokenCount = estimateTokens(piece);
       if (tokenCount < 20) continue;
       chunks.push({
