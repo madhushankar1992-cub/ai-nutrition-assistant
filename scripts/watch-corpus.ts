@@ -3,7 +3,7 @@
 //   npm run corpus:watch              check every enabled source, write a report
 //   npm run corpus:watch -- --dry-run fetch and report, write nothing to the DB
 //
-// Run on a schedule by .github/workflows/corpus-watch.yml. Exits non-zero when
+// Run on a schedule by .github/workflows/corpus-ingest.yml. Exits non-zero when
 // a document changed, so the workflow fails loudly and opens an issue rather
 // than letting a silent edition swap through.
 

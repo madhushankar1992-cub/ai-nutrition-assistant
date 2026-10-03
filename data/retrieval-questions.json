@@ -116,6 +116,7 @@
     "question": "How much salt should adults eat per day?",
     "expectSourceKey": "any",
     "expectMultipleDocuments": true,
+    "expectSourceKeys": ["phe-eatwell-guide", "dga-2025-2030"],
     "expectText": "salt",
     "category": "cross_document",
     "note": "Deliberate overlap: PHE gives 6g salt, the US guidelines give 2,300mg sodium. Both must appear, attributed, with no winner picked."

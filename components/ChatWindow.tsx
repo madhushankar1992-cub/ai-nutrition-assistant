@@ -2,9 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { MessageBubble, type ChatMessage } from "./MessageBubble";
+import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
-import { SourcesPanel } from "./SourcesPanel";
+import {
+  SourcesPanel,
+  type RefusalKind,
+  type RetrievedPassage,
+  type SourcedMessage,
+} from "./SourcesPanel";
 import { LeafIcon, HeroMark, TrashIcon } from "./icons";
 
 const SUGGESTED_QUESTIONS = [
@@ -120,7 +125,7 @@ interface Session {
   id: string;
   title: string;
   conversationId: string | null;
-  messages: ChatMessage[];
+  messages: SourcedMessage[];
   selectedId: string | null;
   draft: string;
   isLoading: boolean;
@@ -158,6 +163,63 @@ function loadSessions(): Session[] {
   } catch {
     return [];
   }
+}
+
+// --- Passing retrieval through to the Sources panel ------------------------
+// The API already returns `retrieval` alongside the claims; the client used to
+// drop it, which left the panel unable to show either the passage a claim came
+// from or WHY a reply had no claims.
+
+interface ChatApiPayload {
+  conversationId?: string;
+  answer?: string;
+  claims?: SourcedMessage["claims"];
+  retrieval?: {
+    sufficient?: boolean;
+    reason?: string;
+    documentsSearched?: { name: string; publisher: string; year: number }[];
+    chunks?: RetrievedPassage[];
+  } | null;
+}
+
+/**
+ * Keep only the passages a shipped claim actually cites.
+ *
+ * The whole top-k is not kept on purpose: every message is persisted to
+ * localStorage, and five ~2 KB passages per turn across twenty threads
+ * overflows the quota — at which point `saveSessions` silently saves nothing
+ * and the user loses their threads to a feature they cannot see.
+ */
+function citedPassages(payload: ChatApiPayload): RetrievedPassage[] {
+  const chunks = payload.retrieval?.chunks;
+  if (!Array.isArray(chunks)) return [];
+  const cited = new Set(
+    (payload.claims ?? []).map((c) => c.source?.chunkId).filter((id): id is string => Boolean(id))
+  );
+  return chunks.filter((c) => cited.has(c.id));
+}
+
+/**
+ * Why this reply has no claims — policy, coverage, or a fault.
+ *
+ * Read off the response shape, because the shape already distinguishes them:
+ *
+ *   - A non-OK status is a fault (503 retrieval down, 422 bad generation).
+ *   - The pre-call scope guard returns before retrieval runs, so its response
+ *     carries NO `retrieval` block at all.
+ *   - The sufficiency gate returns `retrieval.sufficient === false`.
+ *   - The post-call scope guard returns a sufficient retrieval but withholds
+ *     the passages, so `chunks` is empty — that is a policy refusal too, and
+ *     must not be shown as a corpus gap.
+ */
+function classifyRefusal(ok: boolean, payload: ChatApiPayload): RefusalKind | null {
+  if (!ok) return "error";
+  if ((payload.claims ?? []).length > 0) return null;
+  const r = payload.retrieval;
+  if (!r) return "policy";
+  if (r.sufficient === false) return "coverage";
+  if (Array.isArray(r.chunks) && r.chunks.length === 0) return "policy";
+  return null;
 }
 
 function saveSessions(sessions: Session[]) {
@@ -284,7 +346,7 @@ export function ChatWindow() {
     // in flight, and the reply must still land in the thread it came from.
     const sessionId = active.id;
     let conversationId = active.conversationId;
-    const userMessage: ChatMessage = { id: uuidv4(), role: "user", content };
+    const userMessage: SourcedMessage = { id: uuidv4(), role: "user", content };
 
     patch(sessionId, (s) => ({
       ...s,
@@ -318,13 +380,22 @@ export function ChatWindow() {
         });
       }
 
-      const data = await res.json();
+      const data: ChatApiPayload = await res.json();
 
-      const assistantMessage: ChatMessage = {
+      const assistantMessage: SourcedMessage = {
         id: uuidv4(),
         role: "assistant",
         content: data.answer ?? "Sorry, something went wrong.",
         claims: data.claims ?? [],
+        retrieval: data.retrieval
+          ? {
+              sufficient: data.retrieval.sufficient !== false,
+              reason: data.retrieval.reason,
+              documentsSearched: data.retrieval.documentsSearched,
+              passages: citedPassages(data),
+            }
+          : null,
+        refusal: classifyRefusal(res.ok, data),
       };
 
       patch(sessionId, (s) => ({
@@ -335,17 +406,21 @@ export function ChatWindow() {
         isLoading: false,
       }));
     } catch {
+      const errorId = uuidv4();
       patch(sessionId, (s) => ({
         ...s,
         messages: [
           ...s.messages,
           {
-            id: uuidv4(),
+            id: errorId,
             role: "assistant",
             content: "Sorry, something went wrong reaching the server.",
             claims: [],
+            retrieval: null,
+            refusal: "error",
           },
         ],
+        selectedId: errorId,
         isLoading: false,
       }));
     }
@@ -393,7 +468,7 @@ export function ChatWindow() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header hasMessages={!isEmpty} isClearing={isClearing} onClear={handleClear} />
+        <Header hasMessages={!isEmpty} isClearing={isClearing || active.isLoading} onClear={handleClear} />
 
         <div className={`thin-scrollbar flex flex-1 flex-col overflow-y-auto ${isEmpty ? "bg-dot-grid-hero" : ""}`}>
           {isEmpty ? (

@@ -12,6 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "eval": "tsx --env-file=.env scripts/evaluate.ts",
     "test:scope": "tsx scripts/test-scope-guard.ts",
+    "test:corpus": "tsx scripts/test-corpus-watch.ts",
+    "test:rate": "tsx scripts/test-rate-limiter.ts",
     "corpus:watch": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/watch-corpus.ts",
     "ingest": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/ingest.ts",
     "vectors": "tsx --env-file=.env --env-file-if-exists=.env.local scripts/inspect-vectors.ts",

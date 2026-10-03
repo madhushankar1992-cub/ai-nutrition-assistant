@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 // Client-side rate limiting for the Groq `openai/gpt-oss-120b` tier limits:
 // 30 requests/min, 8,000 tokens/min, 1,000 requests/day, 200,000 tokens/day.
 // This is a best-effort, in-memory limiter: it holds up under a single
@@ -21,7 +23,7 @@ interface RequestRecord {
   tokens: number;
 }
 
-class RateLimiter {
+export class RateLimiter {
   private minuteWindow: RequestRecord[] = [];
   private dayRequests = 0;
   private dayTokens = 0;
@@ -50,8 +52,16 @@ class RateLimiter {
    * estimated to use `estimatedTokens`, sleeping as needed. Throws
    * immediately if the daily budget (requests or tokens) is already
    * exhausted — a day-long wait isn't practical to do silently.
+   * Oversized requests reject immediately; a signal cancels queued waits.
    */
-  async reserve(estimatedTokens: number): Promise<void> {
+  async reserve(estimatedTokens: number, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) {
+      throw new Error("Estimated token count must be finite and nonnegative.");
+    }
+    if (estimatedTokens > TPM_SAFE) {
+      throw new Error(`Request token estimate (${estimatedTokens}) exceeds the per-minute budget (${TPM_SAFE}). Reduce the request size.`);
+    }
     this.resetDayIfNeeded();
 
     if (this.dayRequests + 1 > RPD_LIMIT || this.dayTokens + estimatedTokens > TPD_LIMIT) {
@@ -61,6 +71,7 @@ class RateLimiter {
     }
 
     for (;;) {
+      signal?.throwIfAborted();
       this.pruneMinuteWindow();
       const usedTokens = this.minuteWindow.reduce((sum, r) => sum + r.tokens, 0);
       const usedRequests = this.minuteWindow.length;
@@ -71,7 +82,7 @@ class RateLimiter {
 
       const oldest = this.minuteWindow[0];
       const waitMs = oldest ? Math.max(oldest.timestamp + 60_000 - Date.now(), 250) : 1000;
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      await delay(waitMs, undefined, { signal });
     }
 
     this.minuteWindow.push({ timestamp: Date.now(), tokens: estimatedTokens });

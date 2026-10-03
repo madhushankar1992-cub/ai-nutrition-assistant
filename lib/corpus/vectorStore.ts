@@ -180,10 +180,28 @@ export interface RetrievedChunk {
  * unable to answer any of them. Excluded in the WHERE clause rather than
  * filtered afterwards, so they do not consume slots in the candidate pool.
  */
+/**
+ * Chunk kinds that can never answer a question, written once and interpolated
+ * into both queries so the two cannot drift apart.
+ */
 export const NON_ANSWERING_KINDS = ["references", "toc"] as const;
 
-/** Written once and interpolated into both queries so the two cannot drift. */
-const EXCLUDE_NON_ANSWERING = Prisma.sql`c.kind NOT IN ('references', 'toc')`;
+const EXCLUDE_NON_ANSWERING = Prisma.sql`c.kind NOT IN (${Prisma.join(
+  NON_ANSWERING_KINDS.map((k) => Prisma.sql`${k}`)
+)})`;
+
+/** Report the same searchable corpus and optional source filter as queryChunks. */
+export async function listSearchableDocuments(sourceKey?: string) {
+  const filter = sourceKey ? Prisma.sql`AND d."sourceKey" = ${sourceKey}` : Prisma.empty;
+  return prisma.$queryRaw<{ sourceKey: string; name: string; publisher: string; year: number }[]>`
+    SELECT d."sourceKey", d.name, d.publisher, d.year
+    FROM "Document" d
+    WHERE EXISTS (
+      SELECT 1 FROM "Chunk" c WHERE c."documentId" = d.id
+        AND c.embedding IS NOT NULL AND ${EXCLUDE_NON_ANSWERING}
+    ) ${filter}
+    ORDER BY d.name ASC`;
+}
 
 export async function queryChunks(
   queryEmbedding: number[],

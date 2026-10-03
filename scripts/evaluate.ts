@@ -21,10 +21,20 @@ const BASE_URL = process.env.EVAL_BASE_URL ?? "http://localhost:3000";
 const PROMPT_VERSION = createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 10);
 const ATTEMPTS_PER_QUESTION = 3;
 
+interface Citation {
+  document: string;
+  publisher: string;
+  year: number;
+  url: string;
+  section?: string | null;
+  page?: number | null;
+  chunkId: string;
+}
+
 interface ChatApiResponse {
   conversationId: string;
   answer: string;
-  claims: { text: string; source: string | null }[];
+  claims: { text: string; source: Citation | null }[];
 }
 
 interface FailureRecord {
@@ -33,15 +43,33 @@ interface FailureRecord {
   detail: string;
 }
 
+// One cookie jar for the whole run. Conversations are owned by a signed
+// httpOnly cookie, so a harness that does not return it is a NEW browser on
+// every turn: the server then refuses the conversationId it just issued with a
+// 404, and every multi-turn scope case fails as a missed refusal rather than
+// testing anything.
+let sessionCookie: string | null = null;
+
 async function callChat(
   conversationId: string | null,
   message: string
 ): Promise<ChatApiResponse> {
   const res = await fetch(`${BASE_URL}/api/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
+    },
     body: JSON.stringify({ conversationId, message }),
+    signal: AbortSignal.timeout(90_000),
   });
+
+  const setCookie = res.headers.get("set-cookie");
+  if (setCookie) sessionCookie = setCookie.split(";")[0];
+
+  if (!res.ok) {
+    throw new Error(`POST /api/chat returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
   return res.json();
 }
 
@@ -89,12 +117,27 @@ async function runDataset(): Promise<FailureRecord[]> {
         },
       });
 
+      // Milestone 2 inverts this rule. A claim with NO citation is the defect
+      // now; a populated one is the product working. Left as written, a perfect
+      // run logged one "broken_source" failure per claim and the detail string
+      // interpolated an object, printing "[object Object]".
       for (const claim of response.claims) {
-        if (claim.source !== null) {
+        const src = claim.source;
+        if (!src) {
+          failures.push({
+            category: "unsupported_claim",
+            questionId: q.id,
+            detail: `Attempt ${attempt}: claim carries no citation - "${claim.text.slice(0, 80)}"`,
+          });
+          continue;
+        }
+        if (!src.chunkId || !src.publisher || typeof src.year !== "number" || !src.url) {
           failures.push({
             category: "broken_source",
             questionId: q.id,
-            detail: `Attempt ${attempt} returned non-null source "${claim.source}" in Milestone 1`,
+            detail:
+              `Attempt ${attempt}: incomplete citation ` +
+              `(publisher=${src.publisher ?? "-"}, year=${src.year ?? "-"}, chunkId=${src.chunkId ?? "-"})`,
           });
         }
       }
@@ -293,6 +336,7 @@ async function main() {
   writeFailureLogMarkdown(allFailures);
   console.log(`Done. ${allFailures.length} failures logged to Docs/failure-log.md`);
   await prisma.$disconnect();
+  process.exitCode = allFailures.length > 0 ? 1 : 0;
 }
 
 main().catch((err) => {

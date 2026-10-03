@@ -3,15 +3,24 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { M1ResponseSchema, LlmResponseSchema, type LlmResponse } from "./schema";
 import { SYSTEM_PROMPT, SYSTEM_PROMPT_RAG } from "./systemPrompt";
 import { groqRateLimiter, estimateTokens } from "./rateLimiter";
+import { setTimeout as delay } from "node:timers/promises";
 
 const client = new Groq({
   apiKey: process.env.GROQ_API_KEY,
+  // Retries are managed below; SDK retries must not multiply that budget.
+  maxRetries: 0,
+  timeout: 30_000,
 });
 
 // Default: openai/gpt-oss-120b. Override with GROQ_MODEL, e.g. "qwen/qwen3-32b".
 const MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 // Kept modest (rather than the model's max) specifically to conserve the
 // tokens-per-minute budget — see lib/rateLimiter.ts.
+/**
+ * Wall-clock budget for one grounded answer, including rate-limit waits and
+ * retries. Overridable so a slow model can be measured rather than guessed at.
+ */
+const GENERATION_DEADLINE_MS = Number(process.env.GENERATION_DEADLINE_MS) || 45_000;
 const MAX_TOKENS = 700;
 const TEMPERATURE = 0.2; // low but nonzero: reduces run-to-run drift without hiding it entirely from evaluation
 
@@ -40,10 +49,6 @@ class SchemaValidationError extends Error {}
 
 const MAX_TRANSPORT_RETRIES = 3;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /** Reads Retry-After (seconds or HTTP-date) off a rate-limit response, if present. */
 function retryAfterMs(err: InstanceType<typeof Groq.RateLimitError>): number | null {
   const header = err.headers?.get?.("retry-after");
@@ -57,7 +62,8 @@ function retryAfterMs(err: InstanceType<typeof Groq.RateLimitError>): number | n
 async function callOnce(
   history: ConversationTurn[],
   mode: Mode,
-  systemExtra?: string
+  systemExtra?: string,
+  signal: AbortSignal = AbortSignal.timeout(45_000)
 ): Promise<any> {
   // Grounded calls carry retrieved passages, which dominate the token budget,
   // so history is trimmed harder: retrieval already supplies the grounding that
@@ -77,7 +83,8 @@ async function callOnce(
 
   let attempt = 0;
   for (;;) {
-    await groqRateLimiter.reserve(estimatedTokens);
+    signal.throwIfAborted();
+    await groqRateLimiter.reserve(estimatedTokens, signal);
 
     try {
       const response = await client.chat.completions.create({
@@ -101,7 +108,7 @@ async function callOnce(
             strict: true,
           },
         },
-      });
+      }, { signal });
 
       const content = response.choices[0]?.message?.content;
       if (!content) {
@@ -123,6 +130,7 @@ async function callOnce(
 
       return parsed.data;
     } catch (err) {
+      signal.throwIfAborted();
       // Transport-level failures (rate limit / transient 5xx / connection drop)
       // are retried with backoff, separately from schema-validation failures
       // (handled by the caller's single retry-with-correction).
@@ -135,7 +143,7 @@ async function callOnce(
         const backoff = isRateLimit
           ? (retryAfterMs(err as InstanceType<typeof Groq.RateLimitError>) ?? 2000 * attempt)
           : 1000 * attempt;
-        await sleep(backoff);
+        await delay(backoff, undefined, { signal });
         continue;
       }
 
@@ -155,8 +163,9 @@ async function callOnce(
 export async function generateStructuredAnswer(
   history: ConversationTurn[]
 ): Promise<{ answer: string; claims: { text: string; source: null }[] }> {
+  const signal = AbortSignal.timeout(45_000);
   try {
-    return await callOnce(history, "ungrounded");
+    return await callOnce(history, "ungrounded", undefined, signal);
   } catch (err) {
     if (!(err instanceof SchemaValidationError)) throw err;
     return await callOnce(
@@ -169,7 +178,9 @@ export async function generateStructuredAnswer(
             "with valid JSON: `answer` (string) and `claims` (array of { text, source: null }).",
         },
       ],
-      "ungrounded"
+      "ungrounded",
+      undefined,
+      signal
     );
   }
 }
@@ -183,11 +194,12 @@ export async function generateGroundedAnswer(
   history: ConversationTurn[],
   passages: string
 ): Promise<LlmResponse> {
+  const signal = AbortSignal.timeout(GENERATION_DEADLINE_MS);
   const systemExtra = `REFERENCE PASSAGES — the only material you may answer from:
 
 ${passages}`;
   try {
-    return await callOnce(history, "grounded", systemExtra);
+    return await callOnce(history, "grounded", systemExtra, signal);
   } catch (err) {
     if (!(err instanceof SchemaValidationError)) throw err;
     return await callOnce(
@@ -202,7 +214,8 @@ ${passages}`;
         },
       ],
       "grounded",
-      systemExtra
+      systemExtra,
+      signal
     );
   }
 }

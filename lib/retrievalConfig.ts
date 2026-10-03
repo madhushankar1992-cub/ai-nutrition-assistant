@@ -35,6 +35,8 @@ export const RETRIEVAL_CONFIG = {
   vectorStore: "pgvector",
   indexType: "hnsw-cosine",
   k: 5,
+  // Prefer another publisher over a near-tied duplicate passage.
+  sourceDiversityMargin: 0.03,
 
   // Sufficiency gate — CALIBRATED against the question bank, not guessed.
   //

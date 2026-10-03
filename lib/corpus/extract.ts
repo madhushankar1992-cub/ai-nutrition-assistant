@@ -234,9 +234,21 @@ function decodeEntities(s: string): string {
     mdash: "—", ndash: "–", hellip: "…", deg: "°",
     rsquo: "’", lsquo: "‘", ldquo: "“", rdquo: "”",
   };
+  // An out-of-range numeric entity (&#1114112;) makes fromCodePoint throw a
+  // RangeError, which aborted extraction for the whole document. A malformed
+  // entity in one paragraph must not cost the entire source, so it is left as
+  // written rather than decoded.
+  const codePoint = (value: number, original: string) => {
+    try {
+      return String.fromCodePoint(value);
+    } catch {
+      return original;
+    }
+  };
+
   return s
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (m, h) => codePoint(parseInt(h, 16), m))
+    .replace(/&#(\d+);/g, (m, d) => codePoint(Number(d), m))
     .replace(/&([a-z]+);/gi, (m, n) => named[n.toLowerCase()] ?? m);
 }
 

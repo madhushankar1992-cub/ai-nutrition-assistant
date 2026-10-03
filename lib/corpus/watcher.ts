@@ -50,6 +50,17 @@ export interface SourceReport {
   extractedTitle: string | null;
   extractedYears: number[];
   durationMs: number;
+  /**
+   * Cache validators returned by THIS fetch, carried so the snapshot can store
+   * them. Without these on the report there was nowhere for a freshly fetched
+   * ETag to go: the snapshot only ever copied validators from the previous row,
+   * which was null on the first run and therefore null forever. The conditional
+   * GET could never fire, and the documented "an unchanged 7 MB PDF costs a 304
+   * instead of a download" never happened once - the EFSA PDF was re-downloaded
+   * in full on every daily run.
+   */
+  etag: string | null;
+  lastModified: string | null;
 }
 
 export interface WatchReport {
@@ -100,7 +111,7 @@ function checkExpectations(
 
 async function latestSuccessfulSnapshot(sourceKey: string) {
   return prisma.corpusSnapshot.findFirst({
-    where: { sourceKey, checksum: { not: null } },
+    where: { sourceKey, checksum: { not: null }, verdict: { in: ["first_seen", "unchanged"] } },
     orderBy: { checkedAt: "desc" },
   });
 }
@@ -146,6 +157,8 @@ async function watchOne(source: CorpusSourceDef): Promise<SourceReport> {
     extractedTitle: null,
     extractedYears: [],
     durationMs: 0,
+    etag: null,
+    lastModified: null,
   };
 
   // Documents the publisher refuses to serve to robots are reported, never fetched.
@@ -167,10 +180,26 @@ async function watchOne(source: CorpusSourceDef): Promise<SourceReport> {
     httpStatus: result.httpStatus,
     byteLength: result.byteLength,
     durationMs: result.durationMs,
+    // A 304 carries no body and often no validators; keep the previous ones so
+    // the next run can still ask conditionally.
+    etag: result.etag ?? (result.outcome === "unchanged" ? previous?.etag : null) ?? null,
+    lastModified: result.lastModified ?? (result.outcome === "unchanged" ? previous?.lastModified : null) ?? null,
   };
 
   if (result.outcome === "unchanged") {
-    return { ...withFetch, verdict: "unchanged", checksum: previous?.checksum ?? null, detail: "HTTP 304 — not modified." };
+    if (!previous) return { ...withFetch, verdict: "error", detail: "HTTP 304 without a validated baseline." };
+    return {
+      ...withFetch, verdict: "unchanged", checksum: previous.checksum,
+      byteLength: previous.byteLength ?? 0,
+      pageCount: previous.pageCount, wordCount: previous.wordCount,
+      wordsPerPage: previous.wordsPerPage,
+      lowTextPages: JSON.parse(previous.lowTextPages ?? "[]"),
+      artworkPages: JSON.parse(previous.artworkPages ?? "[]"),
+      tablePages: JSON.parse(previous.tablePages ?? "[]"),
+      extractedTitle: previous.extractedTitle,
+      extractedYears: JSON.parse(previous.extractedYears ?? "[]"),
+      detail: "HTTP 304 — validated baseline not modified.",
+    };
   }
   if (result.outcome === "blocked") {
     return { ...withFetch, verdict: "needs_manual_refresh", detail: result.detail };
@@ -289,14 +318,15 @@ export async function runWatch(trigger: string = "manual"): Promise<WatchReport>
   for (const [i, source] of sources.entries()) {
     await upsertSource(source);
 
-    // Re-fetch conditional headers so they can be stored with the snapshot.
-    const previous = await latestSuccessfulSnapshot(source.key);
     const report = await watchOne(source);
     reports.push(report);
 
+    // Store the validators on every successful outcome, not only on a 304 -
+    // storing them only when unchanged meant they were never captured in the
+    // first place.
     await persistSnapshot(run.id, report, {
-      etag: report.verdict === "unchanged" ? previous?.etag : undefined,
-      lastModified: report.verdict === "unchanged" ? previous?.lastModified : undefined,
+      etag: report.etag,
+      lastModified: report.lastModified,
     });
 
     if (i < sources.length - 1) await sleep(DELAY_BETWEEN_REQUESTS_MS);

@@ -8,7 +8,8 @@
 //    fridge power setting (0.817) ABOVE the passage carrying the 48-hour rule.
 //    Both are from the same document and both are "about fridges", so the
 //    embedding cannot separate them — but the question's distinctive words
-//    (leftovers, keep, long) appear in one and not the other. So candidates are
+//    (leftovers, keep) appear in one and not the other. Note "long" is NOT one
+//    of them - it is in STOPWORDS below, because it carries no signal here. So candidates are
 //    fetched by vector, then re-scored with lexical overlap.
 //
 // 2. A SUFFICIENCY GATE. If the best passages are weak, the model is never
@@ -17,7 +18,7 @@
 //    fails.
 
 import { embedQuery } from "./corpus/embeddings";
-import { queryChunks, type RetrievedChunk } from "./corpus/vectorStore";
+import { queryChunks, listSearchableDocuments, type RetrievedChunk } from "./corpus/vectorStore";
 import { RETRIEVAL_CONFIG } from "./retrievalConfig";
 
 /** Fetch this many times k before re-ranking, so the right chunk can climb. */
@@ -138,20 +139,6 @@ export interface RetrievalResult {
   k: number;
 }
 
-/** Documents available to search — used to say what was searched on a refusal. */
-async function listSearchedDocuments(chunks: RetrievedChunk[]) {
-  const seen = new Map<string, { sourceKey: string; name: string; publisher: string; year: number }>();
-  for (const c of chunks) {
-    if (!seen.has(c.sourceKey)) {
-      seen.set(c.sourceKey, {
-        sourceKey: c.sourceKey, name: c.documentName,
-        publisher: c.publisher, year: c.year,
-      });
-    }
-  }
-  return [...seen.values()];
-}
-
 /**
  * Is this set of passages good enough to answer from?
  *
@@ -198,7 +185,7 @@ export async function retrieve(
   const normalised = candidates.map((c) => c.text.toLowerCase().replace(/[^a-z0-9\s-]/g, " "));
   const idf = candidateIdf(qTerms, normalised);
 
-  const scored: ScoredChunk[] = candidates
+  const ranked: ScoredChunk[] = candidates
     .map((c) => {
       const lexicalScore = lexicalRelevance(qTerms, c.text, idf);
       return {
@@ -208,8 +195,21 @@ export async function retrieve(
         score: c.score * (1 - LEXICAL_WEIGHT) + lexicalScore * LEXICAL_WEIGHT,
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
+    .sort((a, b) => b.score - a.score);
+
+  const scored = ranked.slice(0, k);
+  // Keep the strongest passage, while making room for a near-tied source
+  // when repeated passages from one publisher would crowd it out.
+  for (const candidate of ranked.slice(k)) {
+    if (candidate.score < RETRIEVAL_CONFIG.relevanceFloor) break;
+    if (scored.some((c) => c.sourceKey === candidate.sourceKey)) continue;
+    const replace = scored.findLastIndex((c, index) =>
+      index > 0 && scored.some((other, j) => j !== index && other.sourceKey === c.sourceKey)
+    );
+    if (replace < 0 || scored[replace].score - candidate.score > RETRIEVAL_CONFIG.sourceDiversityMargin) continue;
+    scored[replace] = candidate;
+  }
+  scored.sort((a, b) => b.score - a.score);
 
   const { sufficient, reason } = assessSufficiency(scored);
 
@@ -217,7 +217,7 @@ export async function retrieve(
     chunks: scored,
     sufficient,
     reason,
-    documentsSearched: await listSearchedDocuments(candidates),
+    documentsSearched: await listSearchableDocuments(options.documentKey ?? undefined),
     k,
   };
 }

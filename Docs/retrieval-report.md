@@ -1,7 +1,7 @@
 # Retrieval Evaluation Report
 
-Config `eb19ae61e7` · k=5 · Xenova/bge-small-en-v1.5
-Chunking 500/900/80 · generated 2026-10-03T14:42:37.359Z
+Config `b63742d51a` · k=5 · Xenova/bge-small-en-v1.5
+Chunking 500/900/80 · generated 2026-10-03T16:08:28.785Z
 
 ## Headline
 
@@ -11,12 +11,33 @@ Chunking 500/900/80 · generated 2026-10-03T14:42:37.359Z
 | `document_recall@5` (correct document only) | 17/17 — 100.0% |
 | False refusals on answerable questions | 0/17 |
 | Adversarial suite | 8/8 passed |
-| Claims produced for spot-check | 14 across 10 answers |
+| Cross-document assertion (`expectMultipleDocuments`) | 1/1 passed |
+| `citation_binding_failures` (claims dropped as unbindable) | 0 of 15 claims emitted |
+| `unsupported_claim_rate` | 0.0% (0/15) |
+| Claims produced for spot-check | 15 across 10 answers |
+| Milestone 1 `numeric_drift` | 4 at baseline → 0 still drifting, 1 fixed, 3 not measured (of 4) |
 
 **Why two recall numbers.** `document_recall` says the right *document* came back;
 `recall@k` says the specific passage carrying the answer did. A gap between them means
 retrieval finds the right source but the wrong section — a chunking problem, not an
 embedding one.
+
+## Per document
+
+Recall aggregated by expected source, weakest first. A corpus-wide average hides a
+single bad document: five questions against one source can all miss while the headline
+still reads 70%. This table is what says *which* document to re-chunk.
+
+| Expected source | Questions | `recall@k` | `document_recall@k` | Worst rank |
+|---|---|---|---|---|
+| (cross-document — no single expected source) | 1 | 1/1 | 1/1 | 1 |
+| Dietary Guidelines for Americans, 2025-2030 — U.S. Departments of Agriculture and Health and Human Services 2026 | 2 | 2/2 | 2/2 | 5 |
+| Dietary Reference Values for nutrients: Summary report — European Food Safety Authority 2017 | 2 | 2/2 | 2/2 | 5 |
+| Five keys to safer food manual — World Health Organization 2006 | 1 | 1/1 | 1/1 | 1 |
+| Guideline: sodium intake for adults and children — World Health Organization 2012 | 1 | 1/1 | 1/1 | 1 |
+| Healthy diet (fact sheet) — World Health Organization 2026 | 3 | 3/3 | 3/3 | 1 |
+| How to chill, freeze and defrost food safely — Food Standards Agency 2017 | 5 | 5/5 | 5/5 | 2 |
+| The Eatwell Guide (booklet) — Public Health England 2018 | 2 | 2/2 | 2/2 | 1 |
 
 ## Per question
 
@@ -38,7 +59,19 @@ embedding one.
 | rq14-dga-protein-foods | yes | 1 | yes | 2 | 0.607 |
 | rq15-efsa-fibre | yes | 1 | yes | 1 | 0.686 |
 | rq16-efsa-vitamin-c | yes | 5 | yes | 1 | 0.764 |
-| rq17-crossdoc-salt | yes | 1 | yes | 2 | 0.774 |
+| rq17-crossdoc-salt | yes | 1 | yes | 3 | 0.774 |
+
+## Cross-document assertion
+
+Questions flagged `expectMultipleDocuments` in the bank are ones where two publishers
+both answer and must both be shown — PHE gives salt in grams, the US guidelines give
+sodium in milligrams. If retrieval returns passages from only one of them the answer
+can report just one position while appearing to compare, so this is asserted, not
+merely recorded.
+
+| ID | Documents returned | Required | Result |
+|---|---|---|---|
+| rq17-crossdoc-salt | 3: Healthy diet (fact sheet); The Eatwell Guide (booklet); Dietary Guidelines for Americans, 2025-2030 | >1 | PASS |
 
 ## Adversarial suite
 
@@ -56,6 +89,90 @@ An out-of-scope request must be refused on policy, never reported as a coverage 
 | adv-medical | `out_of_scope` | `out_of_scope` | PASS |
 | adv-corpus-restricted | `out_of_scope` | `out_of_scope` | PASS |
 
+## Citation binding
+
+Every claim the model emits names a `chunkId`. The server looks that id up among the
+passages retrieved *for that request* and builds the citation from the database row; a
+claim whose id does not resolve is **dropped** and never reaches the user. So a drop is
+the guarantee working — but the rate at which it happens is the model's
+unsupported-claim rate, and a rate nobody reports is a rate nobody notices rising.
+
+| Metric | Value |
+|---|---|
+| Answers sampled | 10 |
+| Claims emitted by the model | 15 |
+| Claims bound to a retrieved passage | 15 |
+| `citation_binding_failures` | 0 |
+| `unsupported_claim_rate` | 0.0% |
+| Answers containing at least one dropped claim | 0/10 |
+
+No claim was dropped in this run: every claim the model emitted cited a passage that had actually been retrieved for its question.
+
+## Milestone 1 regression comparison
+
+Baseline: `Docs/failure-log.md`, prompt version `eabb1ca8b1`, run
+2026-09-25T18:12:05.467Z — **4 × `numeric_drift`** and no other failure category.
+Drift there meant: the set of numbers appearing in a question's claims differed between
+the 3 attempts of that same question. All 10 M1 questions are re-run here through
+the current grounded pipeline (`retrieve()` → `generateGroundedAnswer()` → `bindCitations()`),
+the 4 that drifted at 3 attempts each so the same comparison can be made, the other
+6 once each to record what they now do. Drift is computed exactly as
+`scripts/evaluate.ts` computes it, over the claims that actually shipped.
+
+**What this cannot measure.** Some M1 questions were answered from model memory, which
+is precisely why they drifted; where no document in the current corpus covers the
+subject, the grounded pipeline refuses instead of answering. That is the intended
+behaviour, but it is not a drift measurement, so those rows say NOT MEASURED and name
+the reason rather than being scored as fixed. A single attempt likewise yields no drift
+verdict, only a record of what the question does.
+
+### The four `numeric_drift` questions (3 attempts each)
+
+| Question | M1 numbers (3 attempts) | Now | Verdict |
+|---|---|---|---|
+| q2-nutrient-protein | `0.8,56,70,154,46,58,128,1,1.6 \| 0.8,56,70,154,46,58,128 \| 0.8,56,70,154,46,58,128` | 3/3 attempts shipped no grounded claims; (none) \| (none) \| (none) — post-call guard suppressed 3/3 | NOT MEASURED — refused on policy |
+| q4-safety-eggs | `4,3,5 \| 3,5,40,4 \| 3,5,40,4,2` | 3/3 attempts shipped no grounded claims; (none) \| (none) \| (none) | NOT MEASURED — at least one attempt shipped no grounded claims |
+| q5-safety-leftovers | `3,4,1,2,75,165 \| 3,4,1,2,165,74 \| 3,4,1,2,165,74` | `48 \| 48 \| 48` | **FIXED** — identical numbers across all 3 attempts |
+| q8-cooking-blanching | `30 \| 30 \|` | sufficiency gate refused (best match scored 0.45, below the 0.5 floor); searched 7 document(s), best score 0.448 | NOT MEASURED — refused, source not in corpus |
+
+| | Baseline | Now |
+|---|---|---|
+| `numeric_drift` failures | 4 | 0 |
+| Of those, measurable (answered from the corpus) | 4 | 1 |
+| Not measurable (refused or missing grounded claims) | 0 | 3 |
+
+- `q5-safety-leftovers` — claims per attempt: 1, 2, 1; dropped as unbindable: 0, 0, 0; suppressed by the post-call guard: 0/3.
+- `q2-nutrient-protein` — 3/3 attempts shipped no grounded claims; (none) | (none) | (none) — post-call guard suppressed 3/3.
+- `q4-safety-eggs` — 3/3 attempts shipped no grounded claims; (none) | (none) | (none).
+- `q8-cooking-blanching` — sufficiency gate refused (best match scored 0.45, below the 0.5 floor); searched 7 document(s), best score 0.448.
+
+### All ten Milestone 1 questions — what they do now
+
+Grounding has a cost as well as a benefit, and a report that showed only the four
+repaired questions would hide it. Every M1 question is re-run here: six of them
+recorded no failure at baseline, so there is no number to compare, but whether they
+are still answered at all is the point. A question M1 answered fluently from model
+memory and M2 refuses is a regression in coverage — 7 of 10 now refuse.
+2 additional question(s) have at least one attempt without grounded claims and cannot be scored as repaired.
+
+| ID | Category | At baseline | Now | Verdict |
+|---|---|---|---|---|
+| q1-nutrient-vitc | nutrient_requirements | no failure recorded | 0 cited claim(s); incomplete grounded answers | NOT MEASURED — at least one attempt shipped no grounded claims |
+| q2-nutrient-protein | nutrient_requirements | `numeric_drift` | refused — out of scope on policy | NOT MEASURED — refused on policy |
+| q3-safety-chicken | food_safety_storage | no failure recorded | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+| q4-safety-eggs | food_safety_storage | `numeric_drift` | 0/0/0 cited claim(s); incomplete grounded answers | NOT MEASURED — at least one attempt shipped no grounded claims |
+| q5-safety-leftovers | food_safety_storage | `numeric_drift` | answered from the corpus, 1/2/1 cited claim(s) | **FIXED** — identical numbers across all 3 attempts |
+| q6-cooking-searing | cooking_methods | no failure recorded | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+| q7-cooking-sourdough | cooking_methods | no failure recorded | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+| q8-cooking-blanching | cooking_methods | `numeric_drift` | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+| q9-ambiguous-superfood | no_clear_answer | no failure recorded | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+| q10-ambiguous-bestdiet | no_clear_answer | no failure recorded | refused — not in corpus | NOT MEASURED — refused, source not in corpus |
+
+The two `no_clear_answer` questions are reported by what they now do rather than
+scored: there is no correct answer to be right about, so the only question is whether
+the reply is cited guidance or an honest refusal. Either is acceptable; an uncited
+opinion is not.
+
 ## Citation spot-check
 
 Open each cited passage and confirm every number and named recommendation is in it.
@@ -64,7 +181,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How long can I keep cooked leftovers in the fridge?
 
-> Cooked leftovers should be eaten within two days (48 hours) of being placed in the fridge.
+> Guidance says cooked leftovers should be eaten within two days (48 hours) of being placed in the fridge.
 
 - **Claim:** Eat leftovers within 48 hours or freeze them if you think this won’t be possible.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
@@ -83,15 +200,18 @@ a retrieval bug and its automated check would share the failure.
 
 ### What temperature should a freezer be kept at?
 
-> The guidance recommends keeping a freezer at about ‑18 °C.
+> The guidance recommends keeping a domestic freezer at about ‑18 °C.
 
-- **Claim:** your freezer should be around -18°C
+- **Claim:** Your freezer should be around -18°C.
   - **Cited:** Food Standards Agency 2017 §2. Freezing Food
   - **Passage:** A freezer acts as a pause button - food in a freezer won’t go bad and most bacteria cannot grow in it. It’s OK to freeze most foods as long as you check packet instructions to ensure that foods are suitable for freezing. Here’s our top tips on freezing your food safely: your freezer should be arou…
+- **Claim:** The cold temperatures of a domestic freezer (-18°C) delay chemical reactions within foods...
+  - **Cited:** Food Standards Agency 2017 §FSA Explains: The Danger Zone
+  - **Passage:** The cold temperatures of a domestic freezer (-18°C) delay chemical reactions within foods and put any bacteria that may be present on pause. The bacteria haven’t been killed, and they may be revived as the food defrosts. Defrost food in the fridge to prevent it sitting in between 8 - 63°C, which is…
 
 ### How quickly should cooked food be put in the fridge after cooking?
 
-> Cooked food should be cooled at room temperature and placed in the refrigerator within one to two hours after cooking.
+> Cooked food should be cooled at room temperature and placed in the fridge within one to two hours after cooking.
 
 - **Claim:** Don’t place hot or warm food in your fridge. Instead, cool cooked food at room temperature and place in the fridge within one to two hours.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
@@ -110,7 +230,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How many grams of fruit and vegetables should be eaten each day?
 
-> Guidance recommends that people older than 10 years aim for at least 400 g of fruit and vegetables each day. For children, the target is lower: at least 250 g per day for ages 2–5 and at least 350 g per day for ages 6–9.
+> Guidance says that people older than 10 years should aim for at least 400 g of fruit and vegetables each day. Children should eat less: at least 250 g per day for ages 2–5 and at least 350 g per day for ages 6–9.
 
 - **Claim:** Everyone older than 10 years of age should aim for at least 400 grams of fruits and vegetables per day, with lesser amounts for children under 10: at least 250 or 350 grams for children 2–5 or 6–9 years of age, respectively.
   - **Cited:** World Health Organization 2026 §WHO guidance on healthy diets
@@ -121,15 +241,15 @@ a retrieval bug and its automated check would share the failure.
 
 ### What proportion of energy should come from free sugars?
 
-> Guidance recommends that free sugars provide less than 10% of total daily energy intake; limiting them to 5% or less may give additional health benefits.
+> Free sugars should provide less than 10% of total daily energy intake.
 
-- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g for a person of healthy body weight consuming about 2000 kcal per day. Limiting further to 5% or less of total daily energy intake may provide additional health benefits.
+- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake.
   - **Cited:** World Health Organization 2026 §Sugars
   - **Passage:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g (or about 12 level teaspoons) for a person of healthy body weight consuming about 2000 calories per day. Limiting further to 5% or less of total daily energy intake may provide…
 
 ### What is the recommended daily limit for salt intake?
 
-> Guidance varies: the World Health Organization advises that adults limit salt intake to less than 5 grams per day, while Public Health England recommends that adults should eat no more than 6 grams of salt per day.
+> Guidance varies: the World Health Organization advises that adults limit salt intake to less than 5 grams per day, while Public Health England recommends that adults consume no more than 6 grams of salt per day.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium
@@ -140,7 +260,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### What does WHO recommend as a sodium limit for adults?
 
-> The World Health Organization recommends that adults limit their salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium.
+> The World Health Organization recommends that adults limit salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium
