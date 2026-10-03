@@ -101,7 +101,6 @@ model Chunk {
   text              String
   tokenCount        Int
   kind              String // prose | table | references | toc — the last two are never retrieved
-  restricted        Boolean  @default(false) // calorie / per-kg-bodyweight content
   configHash        String // which RetrievalConfig produced this chunk
   createdAt         DateTime @default(now())
 

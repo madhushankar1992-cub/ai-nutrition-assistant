@@ -61,14 +61,17 @@ export const CORPUS_SOURCES: CorpusSourceDef[] = [
     name: "Dietary Reference Values for nutrients: Summary report",
     publisher: "European Food Safety Authority",
     year: 2017,
-    url: "https://www.efsa.europa.eu/en/supporting/pub/e15121",
+    // The landing page returns 403 to every non-browser client, so it is not
+    // usable as a citation link that anything can verify. The PDF is the
+    // document itself and serves 200, so url and fileUrl are the same here.
+    url: "https://www.efsa.europa.eu/sites/default/files/2017_09_DRVs_summary_report.pdf",
     fileUrl: "https://www.efsa.europa.eu/sites/default/files/2017_09_DRVs_summary_report.pdf",
     acquisition: "fetched",
     expectTitleContains: "Dietary Reference Values for nutrients",
     expectYearIn: [2017],
     enabled: true,
     notes:
-      "92 pp, 48,717 words, 133 numeric statements. Landing page 403s to bots while the PDF does not — hence url != fileUrl.",
+      "92 pp, 48,717 words, 133 numeric statements. Cited directly as the PDF: the EFSA landing page 403s to all programmatic clients.",
   },
   {
     key: "dga-2025-2030",
@@ -143,33 +146,6 @@ export const CORPUS_SOURCES: CorpusSourceDef[] = [
     notes: "Single-nutrient guideline — exercises single-document filtered retrieval.",
   },
 
-  // --- Hard-blocked to programmatic clients (HTTP 403 even with a browser UA).
-  // Kept in the registry so the watcher reports them as needing manual refresh
-  // rather than silently omitting them from the corpus.
-  {
-    key: "foodsafety-cold-storage",
-    name: "Cold Food Storage Charts",
-    publisher: "FoodSafety.gov (U.S. Department of Health and Human Services)",
-    year: 2026,
-    url: "https://www.foodsafety.gov/food-safety-charts/cold-food-storage-charts",
-    fileUrl: "https://www.foodsafety.gov/food-safety-charts/cold-food-storage-charts",
-    acquisition: "manual",
-    enabled: true,
-    notes:
-      "403 to all programmatic clients. Save by hand into corpus/raw/. Holds the egg and leftover storage tables; its '3-4 days' leftover figure is still UNVERIFIED against the source.",
-  },
-  {
-    key: "usda-fsis-safe-temperatures",
-    name: "Safe Minimum Internal Temperature Chart",
-    publisher: "USDA Food Safety and Inspection Service",
-    year: 2026,
-    url: "https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/safe-temperature-chart",
-    fileUrl:
-      "https://www.fsis.usda.gov/food-safety/safe-food-handling-and-preparation/food-safety-basics/safe-temperature-chart",
-    acquisition: "manual",
-    enabled: true,
-    notes: "403 to all programmatic clients. Covers the chicken-temperature eval question.",
-  },
 ];
 
 export function getSource(key: string): CorpusSourceDef | undefined {

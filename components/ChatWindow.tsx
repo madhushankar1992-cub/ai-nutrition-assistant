@@ -35,13 +35,13 @@ function Header({
             AI Nutrition Assistant
           </h1>
           <p className="hidden truncate text-[12.5px] text-ink-muted sm:block">
-            Grounded, general-knowledge answers — Milestone 1
+            Answers grounded in official dietary guidance, with citations
           </p>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 sm:gap-2.5">
         <span className="hidden rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-[11.5px] font-medium uppercase tracking-wider text-accent sm:inline-flex">
-          No citations yet
+          Select an answer to see its sources
         </span>
         {hasMessages && (
           <button
@@ -283,7 +283,7 @@ export function ChatWindow() {
     // Capture the thread now: the user may switch threads while this request is
     // in flight, and the reply must still land in the thread it came from.
     const sessionId = active.id;
-    const conversationId = active.conversationId;
+    let conversationId = active.conversationId;
     const userMessage: ChatMessage = { id: uuidv4(), role: "user", content };
 
     patch(sessionId, (s) => ({
@@ -295,11 +295,29 @@ export function ChatWindow() {
     }));
 
     try {
-      const res = await fetch("/api/chat", {
+      let res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conversationId, message: content }),
       });
+
+      // 404 means the server will not accept this conversationId for us: the
+      // owner cookie was cleared or expired while the id lived on in
+      // localStorage, or the thread was opened in another browser profile.
+      // Without this the thread is bricked permanently - every later send gets
+      // the same 404 and the user sees "something went wrong" forever, with no
+      // way back except clearing site data. Retry once as a NEW conversation so
+      // the thread keeps working; prior turns stay visible but are not resent,
+      // which is correct, since the server has refused us access to them.
+      if (res.status === 404 && conversationId) {
+        conversationId = null;
+        res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: content }),
+        });
+      }
+
       const data = await res.json();
 
       const assistantMessage: ChatMessage = {

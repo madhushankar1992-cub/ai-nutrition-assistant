@@ -37,7 +37,6 @@ export interface ChunkRow {
   text: string;
   tokenCount: number;
   kind: string;
-  restricted: boolean;
 }
 
 export interface DocumentRecord {
@@ -134,7 +133,7 @@ export async function upsertChunks(
     const values = slice.map((c, j) =>
       Prisma.sql`(
         gen_random_uuid(), ${documentId}, ${c.ordinal}, ${c.section}, ${c.sectionConfidence},
-        ${c.page}, ${c.text}, ${c.tokenCount}, ${c.kind}, ${c.restricted}, ${configHash},
+        ${c.page}, ${c.text}, ${c.tokenCount}, ${c.kind}, ${configHash},
         NOW(), ${toVectorLiteral(vecs[j])}::vector
       )`
     );
@@ -142,7 +141,7 @@ export async function upsertChunks(
     await prisma.$executeRaw`
       INSERT INTO "Chunk" (
         id, "documentId", ordinal, section, "sectionConfidence",
-        page, text, "tokenCount", kind, restricted, "configHash",
+        page, text, "tokenCount", kind, "configHash",
         "createdAt", embedding
       ) VALUES ${Prisma.join(values)}
     `;
@@ -157,7 +156,6 @@ export interface RetrievedChunk {
   section: string;
   page: number;
   kind: string;
-  restricted: boolean;
   sourceKey: string;
   documentName: string;
   publisher: string;
@@ -196,7 +194,7 @@ export async function queryChunks(
 
   const rows = sourceKey
     ? await prisma.$queryRaw<any[]>`
-        SELECT c.id, c.text, c.section, c.page, c.kind, c.restricted,
+        SELECT c.id, c.text, c.section, c.page, c.kind,
                d."sourceKey", d.name AS "documentName", d.publisher, d.year, d.url,
                1 - (c.embedding <=> ${vec}::vector) AS score
         FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
@@ -205,7 +203,7 @@ export async function queryChunks(
         ORDER BY c.embedding <=> ${vec}::vector
         LIMIT ${k}`
     : await prisma.$queryRaw<any[]>`
-        SELECT c.id, c.text, c.section, c.page, c.kind, c.restricted,
+        SELECT c.id, c.text, c.section, c.page, c.kind,
                d."sourceKey", d.name AS "documentName", d.publisher, d.year, d.url,
                1 - (c.embedding <=> ${vec}::vector) AS score
         FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
@@ -221,7 +219,6 @@ export async function queryChunks(
     section: r.section,
     page: r.page,
     kind: r.kind,
-    restricted: r.restricted,
     sourceKey: r.sourceKey,
     documentName: r.documentName,
     publisher: r.publisher,

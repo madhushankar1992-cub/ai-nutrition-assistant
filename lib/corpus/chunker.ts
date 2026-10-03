@@ -67,7 +67,6 @@ export interface Chunk {
   tokenCount: number;
   kind: ChunkKind;
   oversized: boolean;
-  restricted: boolean;
 }
 
 /**
@@ -76,24 +75,6 @@ export interface Chunk {
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
-}
-
-// --- Restricted content ----------------------------------------------------
-// The corpus itself contains the material the assistant must refuse. This is
-// NOT a per-document special case: it was first assumed to be a DGA-only
-// problem, but EFSA — the densest document in the corpus — states protein as
-// "0.8 to 1.25 g/kg body weight per day", because that is how nutrition science
-// expresses intakes. So the scan runs corpus-wide.
-const RESTRICTED_PATTERNS: RegExp[] = [
-  /\bper\s+(kilogram|kg)\b[^.]{0,40}\bbody\s*weight\b/i,
-  /\bg\s*\/\s*kg\b[^.]{0,40}\bbody\s*weight\b/i,
-  /\b\d{3,4}\s*(kcal|calorie|calories)\b[^.]{0,40}\b(per\s+day|daily|pattern|intake|requirement)\b/i,
-  /\bcalorie\s+(target|goal|requirement|pattern|allowance)\b/i,
-  /\b\d{3,4}\s*-\s*calorie\b/i,
-];
-
-export function isRestricted(text: string): boolean {
-  return RESTRICTED_PATTERNS.some((re) => re.test(text));
 }
 
 // --- Section detection -----------------------------------------------------
@@ -366,7 +347,6 @@ export function chunkDocument(
         tokenCount,
         kind: classifyNonProse(piece) ?? "prose",
         oversized: tokenCount > CHUNK_HARD_CAP_TOKENS,
-        restricted: isRestricted(piece),
       });
     }
   };
@@ -392,7 +372,6 @@ export function chunkDocument(
           // can reach this branch by looking like a table. Check it here too.
           kind: classifyNonProse(text) ?? "table",
           oversized: tokenCount > CHUNK_HARD_CAP_TOKENS,
-          restricted: isRestricted(text),
         });
       }
       continue;

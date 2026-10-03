@@ -10,7 +10,9 @@ cp .env.local.example .env.local   # fill in GROQ_API_KEY and DATABASE_URL
 npm run prisma:migrate       # prisma migrate dev — apply schema to the DB in DATABASE_URL
 npm run dev                  # http://localhost:3000
 npm run build                # next build
-npm start                    # next start -H 0.0.0.0 -p ${PORT:-3000} — used by Railway only; Vercel's serverless runtime never runs this script
+npm start                    # next start -H 0.0.0.0 — Next reads PORT itself. Do NOT reintroduce
+                             # `-p ${PORT:-3000}`: npm does not run this through a POSIX shell on
+                             # Windows, so the literal string is passed and the server refuses to start.
 npm run lint                 # next lint
 ```
 
@@ -67,6 +69,8 @@ Single Next.js 14 App Router app — one codebase serves the frontend and the on
 
 `DELETE /api/chat?conversationId=` cascades claims → messages → the conversation itself (application-level cascade, not DB-level). It never touches `Document` or `Chunk`: those are corpus data, not user data.
 
+**Conversation ownership** (`lib/session.ts`): `conversationId` used to be accepted from the client with no check, so anyone holding a UUID could read or extend that conversation. Each browser now receives an opaque id in a signed, httpOnly, `SameSite=Lax` cookie (`nk_owner`), and `Conversation.ownerId` must match. A mismatch answers **404, not 403**, so the endpoint never confirms to a non-owner that an id exists. This is **not** user accounts: no login, no identity, nothing personal in the cookie. Conversations created before ownership existed have `ownerId = null` and are claimed by the first browser to open them — the only migration that does not destroy history. The cookie must survive the Vercel→Railway hop, so `proxyToBackend` forwards `cookie` and returns `set-cookie`; drop either and every request mints a new owner. Signing key is `SESSION_SECRET`, falling back to `DATABASE_URL` so the cookie is never signed with a weak default.
+
 **The `{conversationId, answer, claims[]}` response shape has been stable since Milestone 1.** `ClaimSchema.source` widened from `z.null()` to a `Citation` object when real retrieval landed, with no field rename or shape change; `retrieval` was added alongside, so an M1 client keeps working and simply ignores it. Note the two-schema split in `lib/schema.ts`: `LlmClaimSchema` (`{text, chunkId}`) is what the model may emit, `ClaimSchema` (`{text, source}`) is what the API returns.
 
 **Schema sharing**: `lib/schema.ts`'s Zod schemas are the single source of truth — converted via `zod-to-json-schema` into Groq's `response_format.json_schema.schema`, and reused as-is to validate both the incoming request and the parsed LLM response.
@@ -75,7 +79,7 @@ Single Next.js 14 App Router app — one codebase serves the frontend and the on
 
 **Frontend**: `app/page.tsx` renders a single client component, `ChatWindow` (`components/ChatWindow.tsx`), which owns all state via plain `useState` (no external state library) keyed by `conversationId`. It composes `MessageBubble` (assistant bubbles are clickable/selectable), `ChatInput`, and `SourcesPanel` (claims for the currently *selected* assistant message; hidden below the `md` breakpoint). The client never calls Groq directly and never sees `GROQ_API_KEY`.
 
-**Retrieval corpus** (`lib/corpus/`): `sources.ts` is the registry of which documents may be cited, with `expectTitleContains`/`expectYearIn` edition guards — two candidates once returned HTTP 200 while being the *wrong edition*, which would be a fabricated citation behind a working link. `fetcher.ts` → `extract.ts` → `chunker.ts` → `embeddings.ts` → `vectorStore.ts` is the ingestion chain, driven by `scripts/ingest.ts` and by `.github/workflows/corpus-ingest.yml` on cron `45 3 * * *` (03:45 UTC = 09:15 IST).
+**Retrieval corpus** (`lib/corpus/`): `sources.ts` is the registry of which documents may be cited, with `expectTitleContains`/`expectYearIn` edition guards — two candidates once returned HTTP 200 while being the *wrong edition*, which would be a fabricated citation behind a working link. The registry holds exactly **7 sources, all of which actually ingest**; two US food-safety charts were removed on 2026-10-03 because they 403 to every programmatic client, had never produced a chunk, and were the only warnings in every run. `fetcher.ts` → `extract.ts` → `chunker.ts` → `embeddings.ts` → `vectorStore.ts` is the ingestion chain, driven by `scripts/ingest.ts` and by `.github/workflows/corpus-ingest.yml` on cron `45 3 * * *` (03:45 UTC = 09:15 IST).
 
 Two things in that chain are easy to get wrong and are load-bearing:
 - **HTML sources need their site chrome stripped** (`isolateMainContent` + `CHROME_TAGS` in `extract.ts`). Without it the WHO fact sheet ingested as 7 chunks of which 6 were navigation menus, and the one real chunk ranked 27th on a question only it could answer.
@@ -85,7 +89,9 @@ Two things in that chain are easy to get wrong and are load-bearing:
 
 **Deployment — two live targets sharing one database, with different jobs.** The app is deployed to both Vercel (`https://ai-nutrition-assistant-self.vercel.app`) and Railway (`https://app-production-3fe4f.up.railway.app`), both pointed at the same Railway-hosted Postgres `DATABASE_URL`.
 
-*They are not interchangeable.* Retrieval embeds the query locally with bge-small — roughly 130 MB of ONNX weights — which loads in Railway's long-running container and **cannot** load in a Vercel serverless function, where it failed every single retrieval. So Vercel serves the UI and forwards `/api/chat` to the container via the `BACKEND_API_URL` env var. That forwarding lives **inside the route handler**, not in `next.config.js`: a `rewrites()` entry was tried first and silently did nothing, because Next gives filesystem routes precedence over rewrites and `app/api/chat/route.ts` always won.
+*They are not interchangeable.* Retrieval embeds the query locally with bge-small, which loads in Railway's long-running container and **cannot** load in a Vercel serverless function. So Vercel serves the UI and forwards `/api/chat` to the container via the `BACKEND_API_URL` env var. That forwarding lives **inside the route handler**, not in `next.config.js`: a `rewrites()` entry was tried first and silently did nothing, because Next gives filesystem routes precedence over rewrites and `app/api/chat/route.ts` always won.
+
+**Do not retry the "just make the model smaller" fix — it has been tried and measured.** The weights were cut from fp32 (~127 MB) to int8 (~33 MB) and the second blocker was fixed too (the library caches next to the module, and only the temp directory is writable on serverless, so every cold start downloaded and then failed to cache). Deployed without the proxy, Vercel still returned **503 on every retrieval**. The quantisation was kept because it is strictly better — identical metrics at a quarter the size — but it does **not** make serverless retrieval work. The real fix, if the proxy is ever unacceptable, is a hosted embedding API; Groq has no embeddings endpoint, so that means a new provider and a new credential.
 
 **Railway auto-deploys on push to the linked GitHub branch; Vercel does not** — its GitHub connection was never actually linked (`vercel link`/`git connect` require a one-time dashboard OAuth step), so Vercel deploys only happen via `vercel --prod` run manually from this repo. A `git push` alone updates Railway and GitHub but **not** the live Vercel URL — don't assume otherwise when verifying a change went live. Note also that Railway's `redeploy` re-runs the last build; use `railway up --ci` to build from current source. See `Docs/deployment-plan.md` §9 ("What Actually Happened") for the full list of deploy-time gotchas.
 

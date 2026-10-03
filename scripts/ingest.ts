@@ -1,8 +1,8 @@
-// Full ingestion: scrape -> classify -> chunk -> embed -> upload to Chroma Cloud.
+// Full ingestion: scrape -> classify -> chunk -> embed -> upsert into Postgres/pgvector.
 //
 //   npm run ingest                 the whole corpus
 //   npm run ingest -- --source=KEY one document
-//   npm run ingest -- --dry-run    everything except the Chroma upload
+//   npm run ingest -- --dry-run    everything except the vector-store write
 //
 // Run daily by .github/workflows/corpus-ingest.yml.
 //
@@ -32,7 +32,6 @@ interface DocResult {
   source: CorpusSourceDef;
   status: "ingested" | "skipped" | "aborted" | "failed";
   chunks: number;
-  restricted: number;
   tables: number;
   words: number;
   detail: string;
@@ -52,7 +51,7 @@ function checkExpectations(source: CorpusSourceDef, title: string | null, years:
 }
 
 async function ingestOne(source: CorpusSourceDef, dryRun: boolean, log: RunLog): Promise<DocResult> {
-  const base = { source, chunks: 0, restricted: 0, tables: 0, words: 0 };
+  const base = { source, chunks: 0, tables: 0, words: 0 };
 
   if (source.acquisition === "manual") {
     log.warn("SCRAPE", "publisher blocks robots — needs a manual file", source.key);
@@ -98,19 +97,18 @@ async function ingestOne(source: CorpusSourceDef, dryRun: boolean, log: RunLog):
 
   const stats = {
     chunks: chunks.length,
-    restricted: chunks.filter((c) => c.restricted).length,
     tables: chunks.filter((c) => c.kind === "table").length,
     words: extraction.wordCount,
   };
 
   console.log(
     `    ${extraction.pageCount}p ${extraction.wordCount}w -> ${chunks.length} chunks ` +
-      `(${stats.tables} table, ${stats.restricted} restricted; dropped ${skipPages.length} pages) ` +
+      `(${stats.tables} table; dropped ${skipPages.length} pages) ` +
       `checksum ${checksum.slice(0, 10)}`
   );
 
   // 9. Embed locally with bge-small.
-  log.info("CHUNK", `${chunks.length} chunks (${stats.tables} table, ${stats.restricted} restricted; dropped ${skipPages.length} pages)`, source.key);
+  log.info("CHUNK", `${chunks.length} chunks (${stats.tables} table; dropped ${skipPages.length} pages)`, source.key);
   const texts = chunks.map((c: Chunk) => embeddingText(c, source));
   const embeddings = await embedPassages(texts, (done, total) => {
     if (done === total || done % 128 === 0) process.stdout.write(`    embedding ${done}/${total}\r`);
@@ -187,7 +185,7 @@ async function main() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error("ERROR", msg, source.key);
-      results.push({ source, status: "failed", chunks: 0, restricted: 0, tables: 0, words: 0, detail: msg });
+      results.push({ source, status: "failed", chunks: 0, tables: 0, words: 0, detail: msg });
     }
     const last = results[results.length - 1];
     console.log(`    ${last.status.toUpperCase()}: ${last.detail}\n`);
@@ -198,16 +196,15 @@ async function main() {
   const totals = results.reduce(
     (a, r) => ({
       chunks: a.chunks + r.chunks,
-      restricted: a.restricted + r.restricted,
       tables: a.tables + r.tables,
     }),
-    { chunks: 0, restricted: 0, tables: 0 }
+    { chunks: 0, tables: 0 }
   );
   for (const r of results) {
     console.log(`  ${r.status.padEnd(9)} ${r.chunks.toString().padStart(4)} chunks  ${r.source.name}`);
   }
   console.log("=".repeat(70));
-  console.log(`  ${totals.chunks} chunks total · ${totals.tables} table · ${totals.restricted} restricted`);
+  console.log(`  ${totals.chunks} chunks total · ${totals.tables} table`);
 
   if (!dryRun) {
     const st = await storeStats();
@@ -217,7 +214,7 @@ async function main() {
   log.block([
     "PHASE SUMMARY",
     ...results.map((r) => `  ${r.status.padEnd(9)} ${String(r.chunks).padStart(4)} chunks  ${r.source.name}`),
-    `  TOTAL ${totals.chunks} chunks · ${totals.tables} table · ${totals.restricted} restricted`,
+    `  TOTAL ${totals.chunks} chunks · ${totals.tables} table`,
   ].join("\n"));
 
   const aborted = results.filter((r) => r.status === "aborted");

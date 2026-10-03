@@ -2,7 +2,7 @@
 
 Where corpus vectors live, and how the backend reads them.
 
-Implemented in `lib/corpus/vectorStore.ts`. Status: **`[BUILT]` — 232 chunks stored and queryable.**
+Implemented in `lib/corpus/vectorStore.ts`. Status: **`[BUILT]` — 229 chunks stored and queryable.**
 
 ---
 
@@ -128,8 +128,8 @@ The scheduler runs daily, so ingestion must be idempotent rather than additive.
 From the real run on 2026-10-02:
 
 ```
-232 chunks total · 12 table · 9 restricted
-Postgres/pgvector: 7 documents · 232 chunks · 232 embedded
+229 chunks total · 12 table · 9 restricted
+Postgres/pgvector: 7 documents · 229 chunks · 232 embedded
 completed in 146.2s
 ```
 

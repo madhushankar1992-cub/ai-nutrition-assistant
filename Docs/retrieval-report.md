@@ -1,7 +1,7 @@
 # Retrieval Evaluation Report
 
 Config `eb19ae61e7` · k=5 · Xenova/bge-small-en-v1.5
-Chunking 500/900/80 · generated 2026-10-02T21:39:57.444Z
+Chunking 500/900/80 · generated 2026-10-03T14:42:37.359Z
 
 ## Headline
 
@@ -11,7 +11,7 @@ Chunking 500/900/80 · generated 2026-10-02T21:39:57.444Z
 | `document_recall@5` (correct document only) | 17/17 — 100.0% |
 | False refusals on answerable questions | 0/17 |
 | Adversarial suite | 8/8 passed |
-| Claims produced for spot-check | 15 across 10 answers |
+| Claims produced for spot-check | 14 across 10 answers |
 
 **Why two recall numbers.** `document_recall` says the right *document* came back;
 `recall@k` says the specific passage carrying the answer did. A gap between them means
@@ -75,7 +75,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### What temperature should a domestic fridge be set to?
 
-> A domestic fridge should be set to a temperature between 0 °C and 5 °C.
+> A domestic fridge should be set between 0 °C and 5 °C.
 
 - **Claim:** Your fridge should be set between 0 and 5°C.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
@@ -83,18 +83,15 @@ a retrieval bug and its automated check would share the failure.
 
 ### What temperature should a freezer be kept at?
 
-> The guidance recommends keeping a domestic freezer at about –18 °C.
+> The guidance recommends keeping a freezer at about ‑18 °C.
 
-- **Claim:** Your freezer should be around -18°C
+- **Claim:** your freezer should be around -18°C
   - **Cited:** Food Standards Agency 2017 §2. Freezing Food
   - **Passage:** A freezer acts as a pause button - food in a freezer won’t go bad and most bacteria cannot grow in it. It’s OK to freeze most foods as long as you check packet instructions to ensure that foods are suitable for freezing. Here’s our top tips on freezing your food safely: your freezer should be arou…
-- **Claim:** The cold temperatures of a domestic freezer (-18°C) delay chemical reactions within foods
-  - **Cited:** Food Standards Agency 2017 §FSA Explains: The Danger Zone
-  - **Passage:** The cold temperatures of a domestic freezer (-18°C) delay chemical reactions within foods and put any bacteria that may be present on pause. The bacteria haven’t been killed, and they may be revived as the food defrosts. Defrost food in the fridge to prevent it sitting in between 8 - 63°C, which is…
 
 ### How quickly should cooked food be put in the fridge after cooking?
 
-> Cooked food should be cooled at room temperature and placed in the fridge within one to two hours after cooking.
+> Cooked food should be cooled at room temperature and placed in the refrigerator within one to two hours after cooking.
 
 - **Claim:** Don’t place hot or warm food in your fridge. Instead, cool cooked food at room temperature and place in the fridge within one to two hours.
   - **Cited:** Food Standards Agency 2017 §1. Chilling food
@@ -113,7 +110,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### How many grams of fruit and vegetables should be eaten each day?
 
-> Guidance says that people older than 10 years should aim for at least 400 g of fruit and vegetables each day. Children 2–5 years should aim for at least 250 g, and children 6–9 years should aim for at least 350 g per day.
+> Guidance recommends that people older than 10 years aim for at least 400 g of fruit and vegetables each day. For children, the target is lower: at least 250 g per day for ages 2–5 and at least 350 g per day for ages 6–9.
 
 - **Claim:** Everyone older than 10 years of age should aim for at least 400 grams of fruits and vegetables per day, with lesser amounts for children under 10: at least 250 or 350 grams for children 2–5 or 6–9 years of age, respectively.
   - **Cited:** World Health Organization 2026 §WHO guidance on healthy diets
@@ -124,15 +121,15 @@ a retrieval bug and its automated check would share the failure.
 
 ### What proportion of energy should come from free sugars?
 
-> Guidance states that free sugars should provide less than 10% of total daily energy intake, with an optional lower target of 5% for additional health benefits.
+> Guidance recommends that free sugars provide less than 10% of total daily energy intake; limiting them to 5% or less may give additional health benefits.
 
-- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, ... Limiting further to 5% or less of total daily energy intake may provide additional health benefits.
+- **Claim:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g for a person of healthy body weight consuming about 2000 kcal per day. Limiting further to 5% or less of total daily energy intake may provide additional health benefits.
   - **Cited:** World Health Organization 2026 §Sugars
   - **Passage:** The consumption of free sugars should be limited to less than 10% of total daily energy intake, which is equivalent to 50 g (or about 12 level teaspoons) for a person of healthy body weight consuming about 2000 calories per day. Limiting further to 5% or less of total daily energy intake may provide…
 
 ### What is the recommended daily limit for salt intake?
 
-> Guidance on adult salt intake varies: one source recommends limiting intake to less than 5 grams of salt per day, while another advises no more than 6 grams per day.
+> Guidance varies: the World Health Organization advises that adults limit salt intake to less than 5 grams per day, while Public Health England recommends that adults should eat no more than 6 grams of salt per day.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium
@@ -143,7 +140,7 @@ a retrieval bug and its automated check would share the failure.
 
 ### What does WHO recommend as a sodium limit for adults?
 
-> The World Health Organization recommends that adults limit salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium.
+> The World Health Organization recommends that adults limit their salt intake to less than 5 grams per day, which corresponds to about 2 grams of sodium.
 
 - **Claim:** In adults, salt intake should be limited to less than 5 grams per day (2 grams per day sodium).
   - **Cited:** World Health Organization 2026 §Salt/sodium and potassium

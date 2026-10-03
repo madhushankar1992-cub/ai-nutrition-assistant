@@ -1190,7 +1190,7 @@ How a guidance PDF becomes retrievable, citable passages. This was a separate
 document; it is folded in here so the whole retrieval design reads in one place.
 
 **Implementation status: `[BUILT]`.** `lib/corpus/chunker.ts`, `lib/corpus/embeddings.ts`
-and `lib/corpus/chroma.ts` implement everything below, and the figures are from a
+and `lib/corpus/vectorStore.ts` implement everything below, and the figures are from a
 real run (`npm run ingest -- --dry-run`), not estimates.
 
 ## 34. What a chunk is, and why the shape matters

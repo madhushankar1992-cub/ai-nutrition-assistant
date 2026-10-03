@@ -48,6 +48,13 @@ const NUMERIC_TARGET_PATTERNS: RegExp[] = [
   /\bg\s*\/\s*kg\b[^.?!]{0,30}\bbody\s*weight\b/i,
   /\bhow (many|much)\b[^.?!]{0,50}\bper\s*(kg|kilo(gram)?s?|pound|lb)\b/i,
 
+  // "What protein intake does EFSA state relative to body mass?" - the per-kg
+  // patterns above all require a literal "per kg"/"g/kg", so a request phrased
+  // against body mass or body size slipped through to a corpus that states
+  // exactly those figures.
+  /\b(relative to|based on|scaled to|in proportion to)\b[^.?!]{0,30}\bbody\s*(weight|mass|size)\b/i,
+  /\b(protein|energy|calorie|kcal|intake)\b[^.?!]{0,40}\bbody\s*(weight|mass)\b/i,
+
   // Weight-change intent attached to any intake question.
   /\b(to|so i can|in order to)\s+(lose|gain|cut|drop|put on)\s+(weight|fat|kilos?|pounds?|lbs?)\b/i,
 ];
@@ -84,6 +91,45 @@ function matchAny(
 }
 
 /**
+ * History to scan, with already-refused turns removed.
+ *
+ * The guard reads recent history so a restricted request split across turns is
+ * still caught. Left unfiltered that has a severe side effect, measured: asking
+ * "How many calories should I eat per day?" is refused, the message is still
+ * persisted, and the NEXT three unrelated questions are refused too, each
+ * matching the OLD text "how many calories should i". One out-of-scope question
+ * made the assistant refuse everything until it scrolled out of the six-message
+ * window.
+ *
+ * A turn that was already refused has been dealt with. Keeping it in the window
+ * cannot catch anything new, because what it matches is exactly what was already
+ * blocked - it can only re-fire on innocent messages. So a user turn whose reply
+ * was the refusal is dropped, while every other turn stays, preserving the
+ * split-across-turns protection this window exists for.
+ */
+function conversationalContext(
+  history: { role: string; content: string }[]
+): { role: string; content: string }[] {
+  const kept: { role: string; content: string }[] = [];
+
+  for (let i = 0; i < history.length; i++) {
+    const turn = history[i];
+    const reply = history[i + 1];
+    const wasRefused =
+      turn.role === "user" &&
+      reply?.role === "assistant" &&
+      reply.content.startsWith(REFUSAL_MESSAGE.slice(0, 40));
+
+    if (wasRefused) {
+      i++; // drop the refusal itself too; it quotes the restricted terms
+      continue;
+    }
+    kept.push(turn);
+  }
+  return kept;
+}
+
+/**
  * Checks the new user message together with recent conversation history so
  * rephrased, indirect, or split-across-turns requests are still caught
  * (e.g. "asking about a friend" after the user described their own condition
@@ -93,7 +139,7 @@ export function checkRequest(
   history: { role: string; content: string }[],
   newMessage: string
 ): ScopeCheckResult {
-  const recentHistory = history
+  const recentHistory = conversationalContext(history)
     .slice(-6)
     .map((m) => m.content)
     .join("\n");

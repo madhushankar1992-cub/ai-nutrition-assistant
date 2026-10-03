@@ -5,7 +5,7 @@
 // numbers. Retrieval needs the same discipline: changing k or the chunk size
 // changes results as surely as changing the prompt does.
 //
-// The hash is stored on every chunk in Chroma and on every eval run, so a chunk
+// The hash is stored on every chunk in Postgres and on every eval run, so a chunk
 // produced by an older config is detectable with a query rather than by memory.
 
 import { createHash } from "node:crypto";

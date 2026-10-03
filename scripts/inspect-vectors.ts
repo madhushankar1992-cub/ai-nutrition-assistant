@@ -49,7 +49,6 @@ async function main() {
     SELECT d.name, d.publisher, d.year,
            COUNT(c.id)::int AS chunks,
            COUNT(c.embedding)::int AS embedded,
-           SUM(CASE WHEN c.restricted THEN 1 ELSE 0 END)::int AS restricted,
            SUM(CASE WHEN c.kind='table' THEN 1 ELSE 0 END)::int AS tables
     FROM "Document" d LEFT JOIN "Chunk" c ON c."documentId" = d.id
     GROUP BY d.name, d.publisher, d.year
@@ -62,7 +61,6 @@ async function main() {
   for (const d of perDoc) {
     console.log(
       `${String(d.chunks).padStart(6)} ${String(d.embedded).padStart(4)} ` +
-        `${String(d.tables).padStart(4)} ${String(d.restricted).padStart(6)}  ` +
         `${d.name.slice(0, 44)} — ${d.publisher.slice(0, 22)} ${d.year}`
     );
   }
@@ -77,7 +75,7 @@ async function main() {
   console.log("-".repeat(76));
 
   const samples = await prisma.$queryRawUnsafe<any[]>(`
-    SELECT c.id, c.section, c.page, c.kind, c.restricted, c."tokenCount",
+    SELECT c.id, c.section, c.page, c.kind, c."tokenCount",
            substring(c.text, 1, 150) AS snippet,
            c.embedding::text AS vec,
            d.name AS doc, d.publisher, d.year

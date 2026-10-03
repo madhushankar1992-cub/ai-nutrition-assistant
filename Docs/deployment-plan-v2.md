@@ -137,7 +137,7 @@ After deploying, confirm each — do not infer any of them from a successful bui
 |---|---|---|
 | Vercel | Hobby | Free |
 | Render | Starter | Free tier sleeps on idle — first request after sleep is slow. Paid avoids this |
-| Postgres | Railway / Render | Watch the storage limit; 232 chunks × 384 floats is small |
+| Postgres | Railway / Render | Watch the storage limit; 229 chunks × 384 floats is small |
 | GitHub Actions | Free | ~3 min/day |
 | Groq | Free tier | **The real constraint:** 8,000 tokens/min. RAG context makes each request ~4,200–5,200 tokens, so roughly 1–1.5 requests/minute |
 

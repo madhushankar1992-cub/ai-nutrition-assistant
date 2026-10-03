@@ -91,10 +91,17 @@ jobs:
       # edition guard and will abort per-document rather than per-run.
       - name: Ingest to pgvector
         id: ingest
+        # Dispatch inputs reach the shell through env, never through ${{ }}
+        # interpolation. Interpolated, GitHub substitutes the raw text BEFORE
+        # bash parses the line, so a source value of `x$(...)` executes as a
+        # command - with DATABASE_URL in this job's environment.
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          SOURCE_KEY: ${{ inputs.source }}
         run: |
           ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
-          if [ -n "${{ inputs.source }}" ]; then ARGS="$ARGS --source=${{ inputs.source }}"; fi
+          if [ "$DRY_RUN" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ -n "$SOURCE_KEY" ]; then ARGS="$ARGS --source=$SOURCE_KEY"; fi
           npm run ingest -- $ARGS
 
       - name: Report a source that needs review

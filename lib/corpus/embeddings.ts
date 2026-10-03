@@ -58,7 +58,12 @@ const globalForEmbed = globalThis as unknown as { bgePipeline?: Promise<Pipe> };
 
 async function getPipeline(): Promise<Pipe> {
   if (!globalForEmbed.bgePipeline) {
-    globalForEmbed.bgePipeline = (async () => {
+    // A REJECTED promise must never be cached. Without the catch below, one
+    // transient fault while loading the weights (a network blip, a full disk)
+    // leaves a rejected promise on globalThis, which is truthy — so every later
+    // query re-awaits the same rejection and the service returns 503 forever,
+    // until someone restarts the container by hand.
+    const loading = (async () => {
       const { pipeline, env } = await import("@huggingface/transformers");
 
       // Only the temp directory is writable in a serverless function. Left at
@@ -74,6 +79,11 @@ async function getPipeline(): Promise<Pipe> {
         dtype: EMBEDDING_DTYPE,
       })) as Pipe;
     })();
+
+    loading.catch(() => {
+      if (globalForEmbed.bgePipeline === loading) globalForEmbed.bgePipeline = undefined;
+    });
+    globalForEmbed.bgePipeline = loading;
   }
   return globalForEmbed.bgePipeline;
 }
@@ -86,7 +96,7 @@ export async function warmUp(): Promise<void> {
 async function embedBatch(texts: string[]): Promise<number[][]> {
   const extractor = await getPipeline();
   // bge uses CLS pooling; normalising makes cosine similarity a dot product,
-  // which is also what Chroma's default distance expects.
+  // which is what the pgvector cosine index expects.
   const output = await extractor(texts, { pooling: "cls", normalize: true });
   const data = output.tolist() as number[][];
 
@@ -94,7 +104,7 @@ async function embedBatch(texts: string[]): Promise<number[][]> {
     if (vec.length !== EMBEDDING_DIMENSIONS) {
       throw new Error(
         `Embedding dimension mismatch: got ${vec.length}, expected ${EMBEDDING_DIMENSIONS}. ` +
-          `The model changed — the Chroma collection and any stored vectors must be rebuilt.`
+          `The model changed - every stored vector must be rebuilt.`
       );
     }
   }

@@ -55,7 +55,15 @@ function withOwnerCookie(res: NextResponse, owner: OwnerResult): NextResponse {
 }
 
 async function logFailure(category: string, detail: string) {
-  await prisma.failureLogEntry.create({ data: { category, detail } });
+  // Never throw from inside an error path. The commonest cause of a retrieval
+  // failure is the database being unreachable - and pgvector lives in that same
+  // database, so an unguarded write here throws inside the catch block that was
+  // supposed to return a clean 503, turning it into an opaque 500.
+  try {
+    await prisma.failureLogEntry.create({ data: { category, detail } });
+  } catch {
+    // Logging is best-effort; losing a log row must not change the response.
+  }
 }
 
 function notInCorpusMessage(docs: { name: string; publisher: string; year: number }[]): string {
@@ -226,6 +234,7 @@ export async function POST(req: NextRequest) {
 
   let answer = llm.answer;
   let claims: Claim[] = boundClaims;
+  let suppressed = false;
 
   // 7. Post-call scope guard — independent of whether the pre-call check passed.
   const postCheck = checkResponse(answer);
@@ -233,6 +242,11 @@ export async function POST(req: NextRequest) {
     await logFailure("missed_refusal", `Post-call guard caught category=${postCheck.category}`);
     answer = REFUSAL_MESSAGE;
     claims = [];
+    // The passages are withheld too. Replacing only the answer while still
+    // returning retrieval.chunks[].text ships the exact numeric or medical
+    // content the guard just decided must not go out, to any client that reads
+    // the retrieval block.
+    suppressed = true;
   }
 
   // 8. Persist.
@@ -263,7 +277,7 @@ export async function POST(req: NextRequest) {
       reason: retrieval.reason,
       k: retrieval.k,
       documentsSearched: retrieval.documentsSearched,
-      chunks: retrieval.chunks.map((c) => ({
+      chunks: (suppressed ? [] : retrieval.chunks).map((c) => ({
         id: c.id,
         documentName: c.documentName,
         publisher: c.publisher,
@@ -315,7 +329,10 @@ export async function GET(req: NextRequest) {
         ...body,
         status: "degraded",
         corpus: null,
-        detail: err instanceof Error ? err.message : String(err),
+        // Deliberately not err.message: Prisma names the host, port and user in
+        // P1000/P1001, which would turn an unauthenticated status endpoint into
+        // infrastructure disclosure during an incident.
+        detail: "corpus unavailable",
       },
       { status: 503 }
     );
