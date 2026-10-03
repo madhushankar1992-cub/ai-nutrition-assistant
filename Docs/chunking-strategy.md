@@ -1,5 +1,7 @@
 # Chunking Strategy
 
+> Companion document: **[`embedding-strategy.md`](./embedding-strategy.md)** — the model, its 384 dimensions, int8 precision, and the bge query/passage asymmetry that all of this depends on.
+
 The concrete strategy, its parameters, the analysis that validated it, and where it is applied across the implementation phases.
 
 Implemented in `lib/corpus/chunker.ts`. Status: **`[BUILT]`** — figures below are measured from the live store, not estimates.

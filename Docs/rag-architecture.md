@@ -1186,6 +1186,8 @@ Why prose and structured data stay separate: a nutrient table pulled into a pros
 
 # Part IX — Chunking and Embedding (detail)
 
+> **Embedding strategy is specified in full in [`embedding-strategy.md`](./embedding-strategy.md)**: the model, its 384 dimensions, int8 precision, the bge query/passage asymmetry, what text is actually embedded (the provenance header rides along in the vector), batching, failure behaviour, and what forces a full re-embed. Where that document and this section differ, the measured numbers there are authoritative.
+
 How a guidance PDF becomes retrievable, citable passages. This was a separate
 document; it is folded in here so the whole retrieval design reads in one place.
 

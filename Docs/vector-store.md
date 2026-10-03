@@ -1,5 +1,7 @@
 # Vector Store — pgvector
 
+> Companion document: **[`embedding-strategy.md`](./embedding-strategy.md)** — the model, its 384 dimensions, int8 precision, and the bge query/passage asymmetry that all of this depends on.
+
 Where corpus vectors live, and how the backend reads them.
 
 Implemented in `lib/corpus/vectorStore.ts`. Status: **`[BUILT]` — 229 chunks stored and queryable.**

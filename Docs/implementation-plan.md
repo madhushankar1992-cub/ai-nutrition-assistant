@@ -60,6 +60,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 12 — Corpus Selection and Manifest
 
+> **Embedding strategy.** A source is only admissible if it is English prose or tables: the embedder is `bge-small-en-v1.5`, which is English-only. Admitting a non-English source is a model change, not a registry change — see `Docs/embedding-strategy.md` §9.
+
 **Goal:** a fixed, verified set of 5–7 documents, with provenance recorded, before a line of pipeline code is written.
 
 **Tasks**
@@ -83,6 +85,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 13 — Data Model Migration (Additive Only)
 
+> **Embedding strategy.** `Chunk.embedding` is `vector(384)`, fixed by the model's width. Prisma cannot model a vector type, so the column and its HNSW cosine index are created by migration, never by `db push` — `db push` does not see the column and drops it.
+
 **Goal:** the corpus and citation tables, in a migration safe to run while one deploy target still runs old code.
 
 **Tasks**
@@ -102,6 +106,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 ---
 
 ## Phase 14 — Ingestion Pipeline
+
+> **Embedding strategy.** Passages are embedded with **no prefix** and the provenance header `[publisher · year · section]` prepended by `embeddingText`, in batches of 32, with the 384-width check on every batch. Embedding runs after chunking and before the upsert; a failed load is never cached. See `Docs/embedding-strategy.md` §3, §5.
 
 **Goal:** `scripts/ingest.ts` (`npm run ingest`) — reproducible, idempotent, offline-capable.
 
@@ -143,6 +149,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 15 — Retrieval Layer
 
+> **Embedding strategy.** The query is embedded with the bge prefix `"Represent this sentence for searching relevant passages: "` — applied in `embedQuery` only. Omitting it is silent quality loss, not an error. Query and passage must share the same model **and the same precision**, or the two sides are measured with different rulers (`Docs/embedding-strategy.md` §2, §4).
+
 **Goal:** `lib/retrieval.ts` and `lib/embeddings.ts` — working vector search in both modes, testable without the API route.
 
 **Tasks**
@@ -166,6 +174,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 16 — Sufficiency Gate
 
+> **Embedding strategy.** The floors are calibrated against scores from *this* model at *this* precision. Changing either invalidates the calibration, which is why `embeddingDtype` is part of `RETRIEVAL_CONFIG` and therefore of `configHash`.
+
 **Goal:** `lib/sufficiency.ts` — the mechanism behind the not-in-corpus refusal.
 
 **Tasks**
@@ -186,6 +196,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 17 — Schema and Prompt Changes
 
+> **Embedding strategy.** Nothing here touches vectors, but the passages placed in the prompt are exactly the chunks that were embedded — the prompt text and the embedded text must stay the same unit, or a citation points at something the model never saw.
+
 **Goal:** the two-schema split and the grounded prompt, before anything is wired together.
 
 **Tasks**
@@ -205,6 +217,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 ---
 
 ## Phase 18 — Citation Binding and Route Integration
+
+> **Embedding strategy.** Citation metadata comes from the database row, never from the vector or the model output. The embedding selects the chunk; the row cites it.
 
 **Goal:** `lib/citations.ts` plus the rewired `/api/chat` — **the most important phase in Part B.**
 
@@ -231,6 +245,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 ## Phase 19 — Frontend
 
+> **Embedding strategy.** No embedding runs in the browser. The client never loads the model and never sees a vector; it receives passages already selected server-side.
+
 **Goal:** show the evidence. No rebuild.
 
 **Tasks**
@@ -250,6 +266,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 ---
 
 ## Phase 20 — Retrieval Question Bank and Harness
+
+> **Embedding strategy.** `recall@k` measures the embedding and the ranking together. Record `configHash` with every run, so a change in model or precision is visible as a cause when a number moves.
 
 **Goal:** measure retrieval **separately** from answer quality, and lock the configuration.
 
@@ -273,6 +291,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 ---
 
 ## Phase 21 — Verification
+
+> **Embedding strategy.** Re-embedding is part of verification, not setup: after any chunking or precision change the corpus is re-embedded and the full bank re-run. Measured at int8: `recall@5` 17/17, identical to fp32.
 
 **Goal:** the four exercises the problem statement requires. They are not substitutes for one another.
 
@@ -302,6 +322,8 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 ---
 
 ## Phase 22 — Deployment
+
+> **Embedding strategy.** The model loads in a long-running container and **not** in a serverless function — tested at int8 (~33 MB) and still 503 on Vercel. The API therefore runs on the container and Vercel forwards to it. Do not re-attempt the smaller-model fix; it is measured in `Docs/embedding-strategy.md` §4.
 
 **Goal:** live on both targets, with the migration ordered so neither host breaks.
 
