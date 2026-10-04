@@ -142,3 +142,40 @@ After deploying, confirm each — do not infer any of them from a successful bui
 | Groq | Free tier | **The real constraint:** 8,000 tokens/min. RAG context makes each request ~4,200–5,200 tokens, so roughly 1–1.5 requests/minute |
 
 Groq's token ceiling, not hosting cost, is what limits throughput. See [rag-architecture.md](rag-architecture.md) §42.
+
+---
+
+## Local stack (Docker) — verified 4 October 2026
+
+Production does not use Docker: Railway builds with Railpack and Vercel builds
+Next.js natively. The Docker setup exists so the whole system can run on one
+machine.
+
+| File | Purpose |
+|---|---|
+| `Dockerfile.dev` | App image (Debian, Node 20). **Not** named `Dockerfile`: Railway auto-builds any root-level `Dockerfile` instead of Railpack, which broke a production deploy on 4 October |
+| `docker-compose.yml` | `db` (pgvector/pg16, host port 5433), `app` (port 3000), and an `ingest` service behind the `ingest` profile |
+| `.dockerignore` | Keeps every `.env*` file out of the image |
+
+```bash
+docker compose up --build -d                       # start db + app
+docker compose --profile ingest run --rm ingest    # first run: load the corpus
+docker compose down                                # stop (keeps data and model cache)
+```
+
+**Test run on 4 October 2026** (Docker Desktop 4.93.0, WSL 2):
+
+| Check | Result |
+|---|---|
+| Image build and start | Both containers up; database healthy |
+| Migrations on an empty database | All 5 applied cleanly — the first from-scratch proof of the migration chain |
+| Health before ingest | 0 documents — confirms the app was on the local database, not production |
+| Ingest inside Docker | 7 documents · 226 chunks · 226 embedded · 0 warnings · 0 errors (matches production) |
+| Grounded question | Cited answer (Food Standards Agency, 48 hours) in 4.7 s |
+| Calorie question | Refused, 0 claims |
+| Container `DATABASE_URL` | `db:5432` (local); `BACKEND_API_URL` blank |
+| Production database | Identical before and after: 7 documents, 226 chunks, 0 conversations, same last refresh time |
+
+**Safety:** `.env.local` holds the production `DATABASE_URL`. Compose reads it only
+for the Groq key and overrides `DATABASE_URL` on every service. Never remove those
+overrides.
