@@ -72,10 +72,15 @@ function notInCorpusMessage(docs: { name: string; publisher: string; year: numbe
     return "I couldn't find anything in the guidance I searched that covers this. I only answer from official public dietary guidance documents.";
   }
   const list = docs.map((d) => `${d.name} (${d.publisher}, ${d.year})`).join("; ");
+  // Off-topic questions also land here: retrieval finds nothing relevant, so the
+  // sufficiency gate answers before the model can give its off-topic message.
+  // The wording therefore states the assistant's scope as well as the coverage
+  // gap, so the user gets one consistent explanation either way.
   return (
+    "I only answer questions about food, nutrition and food safety, from official public guidance. " +
     "The guidance I searched doesn't cover that. I looked in: " +
     list +
-    ". I only answer from these official documents, so I'd rather say nothing than guess."
+    ". I'd rather say nothing than guess."
   );
 }
 
