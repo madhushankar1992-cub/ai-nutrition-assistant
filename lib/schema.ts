@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { MAX_MESSAGE_CHARS } from "./limits";
+
+export { MAX_MESSAGE_CHARS };
 
 // A citation is an object, not a URL string.
 //
@@ -50,19 +53,6 @@ export const LlmResponseSchema = z.object({
 export type LlmResponse = z.infer<typeof LlmResponseSchema>;
 export type Claim = z.infer<typeof ClaimSchema>;
 export type ChatResponse = z.infer<typeof ChatResponseSchema>;
-
-// Milestone 1 shape, kept so the before/after evaluation can still run against
-// the ungrounded prompt.
-export const M1ClaimSchema = z.object({
-  text: z.string().min(1),
-  source: z.null(),
-});
-export const M1ResponseSchema = z.object({
-  answer: z.string().min(1),
-  claims: z.array(M1ClaimSchema),
-});
-
-export const MAX_MESSAGE_CHARS = 4000;
 
 export const ChatRequestSchema = z.object({
   conversationId: z.string().uuid().nullable().optional(),

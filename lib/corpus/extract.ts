@@ -146,6 +146,87 @@ const CHROME_TAGS = [
   "select", "dialog", "iframe", "template",
 ];
 
+/**
+ * Containers on a who.int PUBLICATION page (/publications/i/item/...) that sit
+ * inside the <article> but carry no guidance. Matched by whole class token.
+ *
+ *   dynamic-content__details    the catalogue sidebar: "Editors / Number of
+ *                               pages 28 / Reference numbers / ISBN /
+ *                               Copyright". Ingested as its own chunk under a
+ *                               section called "Editors".
+ *   dynamic-content__accordion  the language switcher ("العربية 中文 Français
+ *                               Русский Español") and the "Systematic reviews",
+ *                               "More information" and "Related publications"
+ *                               link lists. Ingested as a chunk filed under a
+ *                               section called "Français".
+ *   button-blue-background      the "Download (403.2 kB)" button.
+ *
+ * Both junk chunks were kind=prose, so they were retrievable and citable, and
+ * deleting them from the store was useless: the daily ingest recreated them.
+ * The overview prose sits in dynamic-content__description, a sibling of the
+ * accordion, so removing these leaves the guidance text untouched. None of the
+ * other HTML sources (WHO fact sheet, gov.uk) use these classes.
+ */
+const PUBLICATION_PAGE_CHROME_CLASSES = [
+  "dynamic-content__details",
+  "dynamic-content__accordion",
+  "button-blue-background",
+];
+
+/**
+ * Remove every element whose class list contains one of `classNames`, together
+ * with everything nested inside it.
+ *
+ * A lazy regex cannot do this: these containers are <div>s holding <div>s, so
+ * `<div ...>[\s\S]*?</div>` stops at the first inner close and leaves the rest
+ * of the block behind. Instead, count same-name opens and closes from the
+ * matched start tag until they balance. If they never balance (truncated or
+ * malformed markup) the element is left in place: keeping a little chrome is
+ * better than deleting the rest of the document.
+ */
+function removeElementsByClass(html: string, classNames: string[]): string {
+  const startTag = /<([a-z][a-z0-9]*)\b[^>]*\bclass\s*=\s*(["'])([^"']*)\2[^>]*>/gi;
+  let out = html;
+  let searchFrom = 0;
+
+  for (;;) {
+    startTag.lastIndex = searchFrom;
+    let m: RegExpExecArray | null;
+    let hit: RegExpExecArray | null = null;
+    while ((m = startTag.exec(out))) {
+      const tokens = m[3].split(/\s+/);
+      if (classNames.some((c) => tokens.includes(c))) {
+        hit = m;
+        break;
+      }
+    }
+    if (!hit) return out;
+
+    const tag = hit[1].toLowerCase();
+    const start = hit.index;
+    const tagPattern = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
+    tagPattern.lastIndex = start + hit[0].length;
+    let depth = 1;
+    let end = -1;
+    let t: RegExpExecArray | null;
+    while ((t = tagPattern.exec(out))) {
+      if (t[0].endsWith("/>")) continue;
+      depth += t[1] ? -1 : 1;
+      if (depth === 0) {
+        end = t.index + t[0].length;
+        break;
+      }
+    }
+
+    if (end < 0) {
+      searchFrom = start + hit[0].length;
+      continue;
+    }
+    out = out.slice(0, start) + " " + out.slice(end);
+    searchFrom = start;
+  }
+}
+
 /** Below this, assume the content container was guessed wrong and use the page. */
 const HTML_MAIN_MIN_WORDS = 50;
 
@@ -194,6 +275,7 @@ function htmlToText(html: string): { text: string; title: string | null } {
     .replace(/<!--[\s\S]*?-->/g, " ");
 
   body = isolateMainContent(body);
+  body = removeElementsByClass(body, PUBLICATION_PAGE_CHROME_CLASSES);
   for (const tag of CHROME_TAGS) {
     body = body.replace(new RegExp(`<${tag}[\\s>][\\s\\S]*?</${tag}>`, "gi"), " ");
   }
@@ -242,13 +324,24 @@ function decodeEntities(s: string): string {
     oacute: "ó", ograve: "ò", ocirc: "ô", otilde: "õ", ouml: "ö",
     uacute: "ú", ugrave: "ù", ucirc: "û", uuml: "ü",
     ccedil: "ç", ntilde: "ñ", szlig: "ß", oslash: "ø", aelig: "æ",
-    Eacute: "É", Ccedil: "Ç", Ntilde: "Ñ", Ouml: "Ö", Uuml: "Ü",
+    Aacute: "Á", Agrave: "À", Acirc: "Â", Atilde: "Ã", Auml: "Ä", Aring: "Å",
+    Eacute: "É", Egrave: "È", Ecirc: "Ê", Euml: "Ë",
+    Iacute: "Í", Oacute: "Ó", Uacute: "Ú", Oslash: "Ø", AElig: "Æ",
+    Ccedil: "Ç", Ntilde: "Ñ", Ouml: "Ö", Uuml: "Ü",
     alpha: "α", beta: "β", gamma: "γ", delta: "δ", mu: "μ", omega: "ω",
     micro: "µ", plusmn: "±", times: "×", divide: "÷", le: "≤", ge: "≥",
     frac12: "½", frac14: "¼", frac34: "¾", sup2: "²", sup3: "³",
     middot: "·", bull: "•", copy: "©", reg: "®", trade: "™",
     laquo: "«", raquo: "»", euro: "€", pound: "£", shy: "",
   };
+  // HTML entity names are case-sensitive: &Aacute; is "Á", &aacute; is "á". A
+  // blanket lowercase fallback turned every capital entity missing from the
+  // table into the wrong letter. Only an ALL-CAPS name (&AMP;, &LT;, &QUOT;),
+  // which browsers accept as the lowercase entity, may fall back; any other
+  // unknown name is left as written rather than decoded wrongly.
+  const caseInsensitiveFallback = (n: string): string | undefined =>
+    n === n.toUpperCase() ? named[n.toLowerCase()] : undefined;
+
   // An out-of-range numeric entity (&#1114112;) makes fromCodePoint throw a
   // RangeError, which aborted extraction for the whole document. A malformed
   // entity in one paragraph must not cost the entire source, so it is left as
@@ -264,7 +357,8 @@ function decodeEntities(s: string): string {
   return s
     .replace(/&#x([0-9a-f]+);/gi, (m, h) => codePoint(parseInt(h, 16), m))
     .replace(/&#(\d+);/g, (m, d) => codePoint(Number(d), m))
-    .replace(/&([a-z][a-z0-9]*);/gi, (m, n) => named[n] ?? named[n.toLowerCase()] ?? m);
+    .replace(/&([a-z][a-z0-9]*);/gi, (m, n: string) => named[n] ?? caseInsensitiveFallback(n) ?? m);
+
 }
 
 async function extractPdf(bytes: Buffer): Promise<ExtractionResult> {

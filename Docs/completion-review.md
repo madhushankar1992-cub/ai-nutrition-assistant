@@ -20,3 +20,23 @@ Reviewed the saved frontend, retrieval, watcher and evaluation changes with a se
 - Full live API evaluation **did not pass**: the original run hit a headers timeout during protein generation. After the bounded-generation fix, the rerun exited nonzero on HTTP 422; the persisted generation error was `The operation was aborted`. This verifies the request stops rather than hanging, but does not establish successful model generation under the current service conditions. The old failure log is not presented as the result of that incomplete run.
 
 The changes remain in the workspace for review. Existing staged changes were preserved.
+
+---
+
+# Final delivery pass — 2026-10-04
+
+## Changes
+
+- **Test data removed.** Every `Conversation` held only known test questions from agents and evaluations (salt, calories, kimchi, vitamin C, protein, leftovers, cooked rice, weight at 5'9", diabetes). 38 conversations, 84 messages and 18 claims were deleted in one transaction, Claim → Message → Conversation. `EvalRun`, `FailureLogEntry`, `ScrapeRun`, `CorpusSnapshot` and the corpus tables were not touched.
+- **WHO publication-page junk removed at the source.** The `who-five-keys` and `who-sodium-guideline` pages carried catalogue chrome inside the `<article>`: an "Editors / Number of pages / ISBN / Copyright" sidebar, a language switcher, and related-publication link lists. These became retrievable prose chunks with sections titled "Editors" and "Français". `lib/corpus/extract.ts` now strips those containers by class at extraction time (`removeElementsByClass`), so the daily ingest cannot recreate them. Re-ingested with 0 warnings and 0 errors: 229 → 226 chunks. The other five sources produce byte-identical chunks, and the overview text and the five keys are unchanged.
+- **Entity decoding.** Unknown mixed-case entities (`&Aacute;`) were lowercased into the wrong letter. Only all-caps names (`&AMP;`) now fall back to the lowercase table. Common capital accented letters were added, and any other unknown entity is left as written.
+- **Chat input limit.** `ChatInput` enforces the server's 4,000-character cap. It shows a counter near the limit and blocks sending when the message is over it. The limit lives in `lib/limits.ts` and is shared with `lib/schema.ts`.
+- **Dead Milestone 1 path removed.** `generateStructuredAnswer`, `M1_SCHEMA`, `M1ResponseSchema` and the ungrounded `SYSTEM_PROMPT` had no caller. Every answer is grounded.
+- **Prompt.** `SYSTEM_PROMPT_RAG` no longer asks the model to "name the documents that were searched", because it never sees that list. When the passages do not answer the question, the model must now say so and return no claims. The sufficiency gate in code still names the documents searched.
+- **Docs.** The Milestone 2 status, the unbuilt `RetrievalRecord` and the stale `vector(1536)` text were brought in line with the as-built system.
+
+## Owner decisions and known limitations (not changed)
+
+- **Protein question refusal.** "How much protein does the average adult need daily?" is refused by scope policy. Whether population-level protein reference values should be answerable is a scope decision for the owner.
+- **`docker compose up` is untested.** Docker is not installed on the delivery machine.
+- **Vercel latency.** Under Groq's per-minute token budget, answers through Vercel → Railway can be slow when several requests arrive close together.

@@ -148,7 +148,7 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 | `components/SourcesPanel.tsx` | The panel exists; the "no source yet" branch is live and the populated branch was written in M1 and **has never executed** | The populated branch needs rewriting, not just enabling — it assumes `source` is a bare URL (§22) |
 | `data/eval-questions.json` | Fixed 10 questions across `nutrient_requirements`, `food_safety_storage`, `cooking_methods`, `no_clear_answer` | Re-run unchanged, for the before/after comparison |
 | `Docs/failure-log.md` | Grouped, counted failures from `scripts/evaluate.ts` (3 runs per question) | Same harness, same categories, plus retrieval metrics |
-| Postgres + Prisma | Shared by both deployments | Gains `Document`, `Chunk`, `RetrievalRecord` tables |
+| Postgres + Prisma | Shared by both deployments | Gains `Document` and `Chunk` tables (a planned `RetrievalRecord` table was not built) |
 
 ## 3. Goals, constraints and non-goals
 
@@ -350,9 +350,9 @@ Chunk {
   page         → locator for the reader
   text         → the passage itself
   tokenCount   → budget accounting
-  restricted   → contains calorie/per-kg targets? (§25)
+  kind         → prose | table | references | toc
   configHash   → which config produced it
-  embedding    → vector(1536)
+  embedding    → vector(384)       (bge-small-en-v1.5, int8 weights)
 }
 ```
 
@@ -598,7 +598,7 @@ This section is the known-weakest part of the architecture, and is recorded as s
 
 ## 16. Step 5 — Prompt composition
 
-`SYSTEM_PROMPT_RAG` is a **second** exported prompt in `lib/systemPrompt.ts`, not an edit of the first. The M1 prompt stays so the before/after comparison can still be run against it.
+`SYSTEM_PROMPT_RAG` is a **second** exported prompt in `lib/systemPrompt.ts`, not an edit of the first. The M1 prompt stays so the before/after comparison can still be run against it. *(As built: the M1 prompt and its ungrounded code path were removed on 2026-10-04 once nothing called them; `SYSTEM_PROMPT_RAG` is now the only prompt. The M1 text remains in git history.)*
 
 Chunks are rendered as a numbered, clearly delimited block, each tagged with its `chunkId`, section and publisher:
 
@@ -752,7 +752,7 @@ Refusals are **200, not an error code**, and share the normal shape. A refusal i
 
 ### 19.4 `DELETE /api/chat?conversationId=<uuid>`
 
-Deletes `Claim` rows for the conversation's messages, then `Message` rows, then the `Conversation` — an explicit application-level cascade, not a DB `ON DELETE CASCADE`. `[TO BUILD]` also deletes `RetrievalRecord` rows. It **never** touches `Document` or `Chunk`: those are corpus data, not user data.
+Deletes `Claim` rows for the conversation's messages, then `Message` rows, then the `Conversation` — an explicit application-level cascade, not a DB `ON DELETE CASCADE`. (A planned `RetrievalRecord` table was never built, so there is nothing further to delete.) It **never** touches `Document` or `Chunk`: those are corpus data, not user data.
 
 > **What "frozen" means precisely.** Retrieval changes the *contents* of `source` and adds a sibling `retrieval` object. It never renames a field, never re-nests `claims`, never changes the endpoint. A client written against Milestone 1 keeps working — it ignores `retrieval` and sees a non-null `source`.
 
@@ -802,7 +802,7 @@ The model must **not** be asked to produce a full citation. If it could emit `pu
 
 ### 21.1 Milestone 1 tables `[BUILT]`
 
-`Conversation` → `Message` → `Claim`, plus `EvalRun` and `FailureLogEntry` used only by the eval harness. `EvalRun.promptVersion` is `sha256(SYSTEM_PROMPT).slice(0,10)`, which is what makes "rerun all 10 after every prompt change" comparable — failures group by `(promptVersion, category)`.
+`Conversation` → `Message` → `Claim`, plus `EvalRun` and `FailureLogEntry` used only by the eval harness. `EvalRun.promptVersion` is `sha256(SYSTEM_PROMPT_RAG).slice(0,10)` (as built; the M1 prompt it once hashed has been removed), which is what makes "rerun all 10 after every prompt change" comparable — failures group by `(promptVersion, category)`.
 
 ### 21.2 New tables `[TO BUILD]`
 
@@ -835,12 +835,16 @@ model Chunk {
   page        Int?
   text        String
   tokenCount  Int
-  embedding   Unsupported("vector(1536)")?
-  restricted  Boolean  @default(false)   // calorie / per-kg targets (§25)
+  // As built: `embedding vector(384)` is NOT declared here. Prisma cannot model
+  // it, so migration 20261003120000_chunk_embedding_vector adds it with raw SQL.
+  // `restricted` was dropped by 20261003160000_drop_chunk_restricted.
   configHash  String
   @@index([documentId, ordinal])
 }
 
+// SUPERSEDED — never built. No RetrievalRecord table exists in
+// prisma/schema.prisma. What was searched is returned per request in the
+// response's `retrieval` block, and each persisted Claim carries its chunkId.
 // What was actually searched and shown, per assistant message.
 model RetrievalRecord {
   id         String   @id @default(uuid())
@@ -1217,9 +1221,8 @@ Chunk {
   text         -> the passage
   tokenCount   -> token budget accounting
   kind         -> prose | table | references | toc
-  restricted   -> contains calorie / per-kg-bodyweight targets
   configHash   -> which config produced it
-  embedding    -> vector(1536)
+  embedding    -> vector(384)        bge-small-en-v1.5 (int8), added by raw SQL
 }
 ```
 
@@ -1407,7 +1410,7 @@ Corpus embedding is a one-off cost of a few hundred calls. Only the query is emb
 
 ### Three operational rules
 
-1. **Dimension is a schema commitment, not a setting.** `vector(1536)` is pinned in the Postgres column. Changing provider changes the column type *and* requires re-embedding everything. `Chunk.configHash` makes a half-migrated index detectable with a query instead of by memory.
+1. **Dimension is a schema commitment, not a setting.** `vector(384)` (bge-small-en-v1.5) is pinned in the Postgres column. Changing model changes the column type *and* requires re-embedding everything. `Chunk.configHash` makes a half-migrated index detectable with a query instead of by memory.
 
 2. **Batch, with retry and backoff.** Embed in batches of ~64 chunks. Providers rate-limit; ingestion is offline so it can afford to wait.
 
@@ -1502,16 +1505,18 @@ export const RETRIEVAL_CONFIG = {
   lowTextPageFloor: 40,
   minProseDensity: 1.2,
   tableDigitRatio: 0.12,
-  embeddingModel: "text-embedding-3-small",
-  embeddingDimensions: 1536,
-  indexType: "exact",
+  embeddingModel: "Xenova/bge-small-en-v1.5",  // as built; local ONNX
+  embeddingDtype: "q8",
+  embeddingDimensions: 384,
+  vectorStore: "pgvector",
+  indexType: "hnsw-cosine",
   k: 5,
   absoluteFloor: 0.0,   // calibrated in Phase 20
   relevanceFloor: 0.0,  // calibrated in Phase 20
 } as const;
 ```
 
-Why this matters: changing `k` or the embedding model changes results as surely as changing the prompt. Milestone 1 already versions the prompt (`sha256(SYSTEM_PROMPT)`); retrieval gets the same discipline. A chunk whose `configHash` differs from the current config is **stale and must be re-ingested** — and that mismatch is detectable with a query rather than by memory.
+Why this matters: changing `k` or the embedding model changes results as surely as changing the prompt. Milestone 1 already versions the prompt (`sha256(SYSTEM_PROMPT)`, now `sha256(SYSTEM_PROMPT_RAG)`); retrieval gets the same discipline. A chunk whose `configHash` differs from the current config is **stale and must be re-ingested** — and that mismatch is detectable with a query rather than by memory.
 
 ---
 
@@ -1532,7 +1537,7 @@ corpus/manifest.json + lib/corpus/sources.ts
   [6] SECTION      outline -> numbered -> typographic -> inherit   (§37)
   [7] CHUNK        heading-aware, 500/900/80, tables whole     (§38)
   [8] POLICY       flag calorie / per-kg chunks as restricted  (§39)
-  [9] EMBED        batch 64 -> provider -> vector(1536)        (§40)
+  [9] EMBED        local bge-small (ONNX, q8) -> vector(384)  (§40)
  [10] UPSERT       Document + Chunk, keyed by
                    (name, year, edition) + configHash
         |
@@ -1568,7 +1573,7 @@ If recall is good but the spot-check fails, the chunks are too small or split ba
 | # | Decision | Leaning | Settled by |
 |---|---|---|---|
 | 1 | PDF parser | `unpdf` — already proven against all 7 sources in the watcher | Table-structure fidelity testing |
-| 2 | Embedding provider + dimension | OpenAI `text-embedding-3-small`, 1536 | Cost check vs local ONNX |
+| 2 | Embedding provider + dimension | **Settled:** local `bge-small-en-v1.5` (ONNX, int8), 384 | Built; see [embedding-strategy.md](embedding-strategy.md) |
 | 3 | `TARGET` / `HARD_CAP` / `OVERLAP` | 500 / 900 / 80 | First `recall@k` measurement |
 | 4 | `k` | 5 — budget-bound (§42) | Joint tuning with chunk size |
 | 5 | Table rendering for embedding | Raw extracted text | Whether a linearised "col: value" form retrieves better |

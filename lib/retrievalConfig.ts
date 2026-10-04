@@ -1,6 +1,6 @@
 // Every knob that changes retrieval results, in one frozen object with a hash.
 //
-// Milestone 1 already versions the prompt (sha256(SYSTEM_PROMPT)) so that
+// Milestone 1 already versions the prompt (now sha256(SYSTEM_PROMPT_RAG)) so that
 // "rerun all 10 questions after every prompt change" produces comparable
 // numbers. Retrieval needs the same discipline: changing k or the chunk size
 // changes results as surely as changing the prompt does.

@@ -4,7 +4,7 @@
 
 Where corpus vectors live, and how the backend reads them.
 
-Implemented in `lib/corpus/vectorStore.ts`. Status: **`[BUILT]` — 229 chunks stored and queryable.**
+Implemented in `lib/corpus/vectorStore.ts`. Status: **`[BUILT]` — 226 chunks stored and queryable** (229 until 2026-10-04, when the WHO publication-page metadata and link-list chunks were stripped at extraction).
 
 ---
 

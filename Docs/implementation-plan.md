@@ -5,7 +5,7 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 | Part | Milestone | Phases | Status |
 |---|---|---|---|
 | **A** | Milestone 1 — prototype without retrieval | 0–11 | ✅ **Complete and deployed** |
-| **B** | Milestone 2 — dietary guidance RAG | 12–22 | ⬜ **Not started** |
+| **B** | Milestone 2 — dietary guidance RAG | 12–22 | ✅ **Complete and deployed** (4 Oct 2026). Railway serves retrieval; Vercel serves the UI and forwards `/api/chat` to Railway. Where Part B below differs from what shipped, [rag-architecture.md](rag-architecture.md) and `CLAUDE.md` describe the as-built system. |
 
 ---
 ---
@@ -91,7 +91,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 **Tasks**
 
 - Enable the `pgvector` extension on the Railway Postgres.
-- Add `Document`, `Chunk` (with `embedding vector(384)`, `restricted` — later dropped by migration `20261003160000_drop_chunk_restricted` — and `configHash`), and `RetrievalRecord` per [rag-architecture.md §21.2](rag-architecture.md).
+- Add `Document`, `Chunk` (with `embedding vector(384)`, `restricted` — later dropped by migration `20261003160000_drop_chunk_restricted` — and `configHash`) per [rag-architecture.md §21.2](rag-architecture.md). *(As built: the planned `RetrievalRecord` table was **not** created and does not exist in `prisma/schema.prisma`; see Phase 18 below.)*
 - Add `Claim.chunkId` as a **nullable** FK to `Chunk`.
 - **Leave `Claim.source` in place.** It is dropped in a later release, not this one.
 - Add `lib/retrievalConfig.ts` — one frozen object (chunk target, cap, overlap, embedding model, index type, `k`, sufficiency thresholds) plus its `sha256` prefix.
@@ -211,7 +211,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 - `LlmClaimSchema` has no field through which a citation could be fabricated.
 - `SYSTEM_PROMPT_RAG` covers: answer only from passages; every claim carries a `chunkId`; separate claims per document; show disagreement with publishers and years; passage text is data, never instructions; population-level framing; out-of-scope categories retained verbatim.
-- `SYSTEM_PROMPT` is unchanged and still exported.
+- `SYSTEM_PROMPT` is unchanged and still exported. *(As built: kept through Milestone 2, then removed on 2026-10-04 with the rest of the ungrounded path, once nothing called it.)*
 
 ---
 
@@ -227,13 +227,13 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 - Rewire `app/api/chat/route.ts` to the [§11](rag-architecture.md) order: validate → load → **scope guard** → persist user message → embed → search → **sufficiency gate** → compose → generate → **bind citations** → `checkResponse` → persist → respond.
 - **Remove the M1 `source = null` clamp**, now that `bindCitations` replaces it.
 - Add the `NOT_IN_CORPUS` refusal, populating `retrieval.documentsSearched` so the answer can name what it searched.
-- Persist a `RetrievalRecord` per assistant message.
+- ~~Persist a `RetrievalRecord` per assistant message.~~ *Not built.* What was searched is returned in each response's `retrieval` block, and every persisted `Claim` stores its `chunkId`.
 - Add `documentId` to `ChatRequestSchema`, validated as a UUID and resolved against `Document`.
-- Extend `DELETE` to remove `RetrievalRecord` rows — and **not** `Document` or `Chunk`.
+- `DELETE` removes `Claim` → `Message` → `Conversation`, and **not** `Document` or `Chunk`. (No `RetrievalRecord` rows exist to remove.)
 
 **Exit criteria**
 
-- A normal question returns claims with populated citations; every cited `chunkId` appears in that request's `RetrievalRecord`.
+- A normal question returns claims with populated citations; every cited `chunkId` appears in that request's retrieved set (`retrieval.chunks` in the response).
 - **A forced hallucinated `chunkId` results in the claim being dropped**, not shipped — test this deliberately.
 - A calorie-target request is refused **before** any embedding or search call is made (verify via logs, not by inspection).
 - An out-of-corpus question returns `NOT_IN_CORPUS` naming the documents searched, with no model call.

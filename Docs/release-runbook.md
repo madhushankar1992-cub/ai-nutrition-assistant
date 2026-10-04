@@ -55,7 +55,7 @@ A single grounded answer needs about 2,900 tokens in one request.
 ## 6. Verify both live hosts
 
 - Backend `https://app-production-3fe4f.up.railway.app/api/chat` (GET): status ok, 7 documents,
-  229 chunks, groqConfigured true.
+  226 chunks (229 before the 2026-10-04 WHO publication-page cleanup), groqConfigured true.
 - Frontend `https://ai-nutrition-assistant-self.vercel.app` (GET root 200; GET /api/chat ok).
 - POST a salt question on each host: a cited answer, with WHO and PHE both attributed.
 - POST a calorie question: refused, no claims.
