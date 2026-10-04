@@ -13,12 +13,15 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../lib/db";
-import { SYSTEM_PROMPT } from "../lib/systemPrompt";
+import { SYSTEM_PROMPT_RAG } from "../lib/systemPrompt";
 import { REFUSAL_MESSAGE } from "../lib/scopeGuard";
 import questions from "../data/eval-questions.json";
 
 const BASE_URL = process.env.EVAL_BASE_URL ?? "http://localhost:3000";
-const PROMPT_VERSION = createHash("sha256").update(SYSTEM_PROMPT).digest("hex").slice(0, 10);
+// Hash the prompt the live route actually uses. Hashing the retired Milestone 1
+// SYSTEM_PROMPT meant edits to the live prompt never changed promptVersion,
+// which defeated grouping eval results by prompt over time.
+const PROMPT_VERSION = createHash("sha256").update(SYSTEM_PROMPT_RAG).digest("hex").slice(0, 10);
 const ATTEMPTS_PER_QUESTION = 3;
 
 interface Citation {

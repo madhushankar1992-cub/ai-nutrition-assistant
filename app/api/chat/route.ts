@@ -8,6 +8,7 @@ import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
+import { getSource } from "@/lib/corpus/sources";
 
 // Groq calls retry with backoff on rate limits, and a grounded request also
 // embeds the query and hits the vector store first. Hobby plan max is 60s.
@@ -93,6 +94,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
   const { message, documentKey } = parsedRequest.data;
+
+  // An unknown or disabled document key used to pass validation, run an
+  // embedding and a search, and answer 200 "couldn't find anything" - a
+  // client typo reported as a coverage gap. It is a bad request.
+  if (documentKey && !getSource(documentKey)?.enabled) {
+    return NextResponse.json({ error: "Unknown documentKey" }, { status: 400 });
+  }
   let { conversationId } = parsedRequest.data;
 
   // 1. Establish who is asking, then load or create the conversation. History
@@ -225,7 +233,8 @@ export async function POST(req: NextRequest) {
       name === "AbortError" ||
       name === "TimeoutError" ||
       status === 429 ||
-      /rate limit/i.test(message);
+      // The local limiter's own refusals, e.g. "exceeds the per-minute budget".
+      /rate limit|per-minute budget/i.test(message);
 
     await logFailure(atCapacity ? "capacity" : "invalid_schema", message);
     const fallback = atCapacity
@@ -253,8 +262,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let answer = llm.answer;
-  let claims: Claim[] = boundClaims;
+  // The model sometimes copies tool-style citation markers ("【PASSAGE 1†L3】")
+  // into its text. Citations are built server-side from the database, so the
+  // markers are noise the user should never see.
+  const stripMarkers = (text: string) => text.replace(/[ 	]*【[^】]*】/g, "").trim();
+  let answer = stripMarkers(llm.answer);
+  // A claim that was nothing but a marker is dropped rather than shipped empty.
+  let claims: Claim[] = boundClaims
+    .map((c) => ({ ...c, text: stripMarkers(c.text) }))
+    .filter((c) => c.text.length > 0);
+
+  // A blank answer passed the schema (it only checks length >= 1) and was
+  // returned as a 200 with an empty bubble. It is a failed generation.
+  if (!answer) {
+    await logFailure("invalid_schema", "Model returned a blank answer");
+    const fallback = "Sorry, something went wrong generating a response. Please try again.";
+    await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
+    return withOwnerCookie(
+      NextResponse.json({ conversationId, answer: fallback, claims: [] }, { status: 422 }),
+      owner
+    );
+  }
   let suppressed = false;
 
   // 7. Post-call scope guard — independent of whether the pre-call check passed.

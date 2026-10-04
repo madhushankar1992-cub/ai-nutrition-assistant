@@ -233,6 +233,21 @@ function decodeEntities(s: string): string {
     amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
     mdash: "—", ndash: "–", hellip: "…", deg: "°",
     rsquo: "’", lsquo: "‘", ldquo: "“", rdquo: "”",
+    // Accented letters and symbols that real sources contain. Undecoded, they
+    // reached stored chunks and citations: "&alpha;-linolenic acid" in a WHO
+    // passage, and "Fran&ccedil;ais" as a WHO citation's section label.
+    aacute: "á", agrave: "à", acirc: "â", atilde: "ã", auml: "ä", aring: "å",
+    eacute: "é", egrave: "è", ecirc: "ê", euml: "ë",
+    iacute: "í", igrave: "ì", icirc: "î", iuml: "ï",
+    oacute: "ó", ograve: "ò", ocirc: "ô", otilde: "õ", ouml: "ö",
+    uacute: "ú", ugrave: "ù", ucirc: "û", uuml: "ü",
+    ccedil: "ç", ntilde: "ñ", szlig: "ß", oslash: "ø", aelig: "æ",
+    Eacute: "É", Ccedil: "Ç", Ntilde: "Ñ", Ouml: "Ö", Uuml: "Ü",
+    alpha: "α", beta: "β", gamma: "γ", delta: "δ", mu: "μ", omega: "ω",
+    micro: "µ", plusmn: "±", times: "×", divide: "÷", le: "≤", ge: "≥",
+    frac12: "½", frac14: "¼", frac34: "¾", sup2: "²", sup3: "³",
+    middot: "·", bull: "•", copy: "©", reg: "®", trade: "™",
+    laquo: "«", raquo: "»", euro: "€", pound: "£", shy: "",
   };
   // An out-of-range numeric entity (&#1114112;) makes fromCodePoint throw a
   // RangeError, which aborted extraction for the whole document. A malformed
@@ -249,7 +264,7 @@ function decodeEntities(s: string): string {
   return s
     .replace(/&#x([0-9a-f]+);/gi, (m, h) => codePoint(parseInt(h, 16), m))
     .replace(/&#(\d+);/g, (m, d) => codePoint(Number(d), m))
-    .replace(/&([a-z]+);/gi, (m, n) => named[n.toLowerCase()] ?? m);
+    .replace(/&([a-z][a-z0-9]*);/gi, (m, n) => named[n] ?? named[n.toLowerCase()] ?? m);
 }
 
 async function extractPdf(bytes: Buffer): Promise<ExtractionResult> {

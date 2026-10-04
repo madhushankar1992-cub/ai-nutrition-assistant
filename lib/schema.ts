@@ -62,9 +62,15 @@ export const M1ResponseSchema = z.object({
   claims: z.array(M1ClaimSchema),
 });
 
+export const MAX_MESSAGE_CHARS = 4000;
+
 export const ChatRequestSchema = z.object({
   conversationId: z.string().uuid().nullable().optional(),
-  message: z.string().min(1),
+  // Capped: an unbounded message (a 2 MB paste was accepted) was stored and
+  // embedded, then failed generation with a token estimate far over the
+  // per-minute budget, and stayed in the history so later turns failed too.
+  // 4,000 characters is far beyond any real question.
+  message: z.string().min(1).max(MAX_MESSAGE_CHARS),
   /** Restrict retrieval to one named document. */
   documentKey: z.string().min(1).nullable().optional(),
 });

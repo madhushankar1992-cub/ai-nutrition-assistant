@@ -915,9 +915,11 @@ Corpus research found a real, clean disagreement on exactly the question that dr
 | Publisher | Leftovers | Cooling after cooking | Fridge | Freezer | After defrosting |
 |---|---|---|---|---|---|
 | **Food Standards Agency** (UK) — *read from the source* | **within 48 hours** | within 1–2 hours; max 4 hours out of the fridge during prep | **0–5 °C**, checked weekly | around −18 °C | use within 24 hours; reheat only once |
-| **FoodSafety.gov** (US HHS) — *secondary, see caveat* | **3–4 days** refrigerated | — | — | — | — |
+| **FoodSafety.gov** (US HHS) — *removed from the corpus 2026-10-03* | **3–4 days** refrigerated | — | — | — | — |
 
 Both are current official guidance from national bodies. They do not agree, and the gap is large: 48 hours against 3–4 days.
+
+> **As built (2026-10-03):** FoodSafety.gov was removed from the corpus — it returns 403 to every automated client and never produced a chunk. This overlap is therefore no longer testable, and the cross-document case the system is evaluated on is **salt** (WHO under 5 g/day, Public Health England 6 g/day, US 2,300 mg sodium; `rq17-crossdoc-salt`). The table is kept as the design record of why a disagreement case was wanted.
 
 > **Caveat worth preserving in a document about citation integrity.** The FSA figures above were read directly from the FSA guidance text. The US figure was **not** — FoodSafety.gov is 403-blocked, so "3–4 days" comes from a search engine's rendering and is a *secondary* source. It must be confirmed against the document once acquired by hand (§6). Treating a search snippet as a verified primary citation is exactly the failure this architecture is built to prevent, so it should not appear in our own design notes unlabelled.
 

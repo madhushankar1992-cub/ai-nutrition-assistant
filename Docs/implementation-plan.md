@@ -68,10 +68,9 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 - Choose the final 5–7 from the 39 checked URLs in [problemStatement.md](problemStatement.md). Starting shortlist is the recommended seven: WHO Healthy Diet fact sheet, EFSA DRV Summary, DGA 2025–2030, Eatwell Guide, WHO Five Keys, FSA chill/freeze/defrost, WHO sodium guideline.
 - Create `corpus/manifest.json` with, per document: `name`, `publisher`, `year`, `url` (reader-facing), `fileUrl` (fetchable — these differ for EFSA), `retrievedAt`, `edition`, `acquisition`, `sourceFile`, `licenseNote`, `expectTitleContains`, `expectYearIn`.
-- **Acquire the four bot-blocked documents by hand** and commit them to `corpus/raw/`: FoodSafety.gov cold-storage charts, USDA FSIS temperature chart, and any others returning 403. Record `acquisition: "manual"`.
+- **No document is acquired by hand.** The two bot-blocked US documents (FoodSafety.gov cold-storage charts, USDA FSIS temperature chart) were removed on 2026-10-03: both return 403 to every automated client and never produced a chunk. Every source in the registry is fetched from its public URL.
 - Record the **corpus boundary** — what the corpus does *not* cover. Note that children's requirements will **not** work as the boundary: WHO's sodium guideline covers ages 2–15 and the US guidelines cover birth onward. Pick clinical/therapeutic diets, pregnancy-specific requirements, or an unaddressed food category instead.
-- Record which topic is the **deliberate cross-document overlap**. The verified candidate is leftover storage: FSA says *within 48 hours*; FoodSafety.gov says *3–4 days*.
-- Confirm the US "3–4 days" figure against the hand-acquired document. It currently comes from a search-engine rendering, not the source.
+- Record which topic is the **deliberate cross-document overlap**. As built, it is **salt**: WHO says under 5 g/day, Public Health England 6 g/day, and the US guidelines 2,300 mg sodium. Retrieval must surface more than one and attribute each (`rq17-crossdoc-salt`). The original leftover-storage overlap (FSA 48 hours vs FoodSafety.gov 3–4 days) was dropped with the FoodSafety.gov source.
 
 **Exit criteria**
 
@@ -356,9 +355,9 @@ Each changes measured results, so each must be fixed and recorded before the que
 | 1 | Which 5–7 documents | The recommended seven | Phase 12 |
 | 2 | Chunk target / cap / overlap | 500 / 900 / 80 tokens | Phase 14, confirm Phase 20 |
 | 3 | Table handling | Keep whole, allow over-cap, flag | Phase 14 |
-| 4 | Embedding model + dimension | OpenAI `text-embedding-3-small`, 1536 | Phase 15 |
+| 4 | Embedding model + dimension | `bge-small-en-v1.5` (local ONNX), 384, int8 — see `Docs/embedding-strategy.md` | Phase 15 |
 | 5 | `k` | 5 — **budget-bound, see Risks** | Phase 20 |
-| 6 | Index type | Exact search, no ANN — already settled by corpus size | Phase 13 |
+| 6 | Index type | HNSW, cosine (pgvector), created by migration | Phase 13 |
 | 7 | Sufficiency thresholds | Calibrate against the bank | Phase 20 |
 | 8 | `restricted` chunk policy | Flag and retrieve, never restate targets | Phase 14 |
 | 9 | Near-miss corpus boundary | **Not children** | Phase 12 |
