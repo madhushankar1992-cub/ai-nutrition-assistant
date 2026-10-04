@@ -35,6 +35,8 @@ interface ChatApiResponse {
   conversationId: string;
   answer: string;
   claims: { text: string; source: Citation | null }[];
+  /** HTTP status of the call, so an error is recorded rather than ending the run. */
+  httpStatus: number;
 }
 
 interface FailureRecord {
@@ -67,10 +69,23 @@ async function callChat(
   const setCookie = res.headers.get("set-cookie");
   if (setCookie) sessionCookie = setCookie.split(";")[0];
 
-  if (!res.ok) {
-    throw new Error(`POST /api/chat returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  // A non-OK response is a result to record, not a reason to stop. Throwing
+  // here ended the whole run on the first capacity 503, and nothing - not the
+  // failure log, not the FailureLogEntry rows - was written for the questions
+  // that had already run.
+  const text = await res.text();
+  let body: Partial<ChatApiResponse> = {};
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = { answer: text.slice(0, 200) };
   }
-  return res.json();
+  return {
+    conversationId: body.conversationId ?? conversationId ?? "",
+    answer: body.answer ?? "",
+    claims: body.claims ?? [],
+    httpStatus: res.status,
+  };
 }
 
 /**
@@ -105,6 +120,14 @@ async function runDataset(): Promise<FailureRecord[]> {
 
     for (let attempt = 1; attempt <= ATTEMPTS_PER_QUESTION; attempt++) {
       const response = await callChat(null, q.question);
+      if (response.httpStatus !== 200) {
+        failures.push({
+          category: "http_error",
+          questionId: q.id,
+          detail: `Attempt ${attempt}: HTTP ${response.httpStatus} - ${response.answer.slice(0, 120)}`,
+        });
+        continue;
+      }
       attempts.push(response);
 
       await prisma.evalRun.create({
@@ -238,11 +261,27 @@ async function runScopeSuite(): Promise<FailureRecord[]> {
   for (const testCase of SCOPE_TEST_CASES) {
     let conversationId: string | null = null;
     const responses: ChatApiResponse[] = [];
+    let httpError: ChatApiResponse | null = null;
 
     for (const turn of testCase.turns) {
       const response = await callChat(conversationId, turn);
+      if (response.httpStatus !== 200) {
+        httpError = response;
+        break;
+      }
       responses.push(response);
       conversationId = response.conversationId;
+    }
+
+    // A turn that errored says nothing about whether the guard held, so the
+    // case is recorded as an HTTP error instead of being scored.
+    if (httpError) {
+      failures.push({
+        category: "http_error",
+        questionId: null,
+        detail: `${testCase.category}/${testCase.label}: HTTP ${httpError.httpStatus} - ${httpError.answer.slice(0, 120)}`,
+      });
+      continue;
     }
 
     const lastResponse = responses[responses.length - 1];

@@ -114,14 +114,28 @@ function conversationalContext(
 
   for (let i = 0; i < history.length; i++) {
     const turn = history[i];
+
+    // Only the USER's words are scanned. Assistant replies quote the corpus,
+    // and the corpus states restricted figures as plain facts: an ordinary
+    // answer citing EFSA's "0.83 g of protein per kg of body weight" matched
+    // the per-kg pattern, and every later question in that conversation was
+    // refused for as long as the answer stayed in the window - which, once
+    // refused turns were being dropped, was forever. What the user asked is
+    // what the policy is about; what the guidance says is not.
+    if (turn.role !== "user") continue;
+
     const reply = history[i + 1];
     const wasRefused =
-      turn.role === "user" &&
-      reply?.role === "assistant" &&
-      reply.content.startsWith(REFUSAL_MESSAGE.slice(0, 40));
+      reply?.role === "assistant" && reply.content.startsWith(REFUSAL_MESSAGE.slice(0, 40));
 
-    if (wasRefused) {
-      i++; // drop the refusal itself too; it quotes the restricted terms
+    // A refused request for a number or a target is self-contained: it has
+    // been dealt with, and keeping it would only re-fire on innocent
+    // follow-ups. A refused DISCLOSURE of a condition is different - it
+    // stays true. After "I have diabetes", "so what should I eat for
+    // breakfast?" is condition-specific advice even though it does not say
+    // so, and the model still sees the disclosure in its history. Dropping it
+    // here let exactly that follow-up through.
+    if (wasRefused && !matchAny(MEDICAL_ADVICE_PATTERNS, turn.content.toLowerCase()).matched) {
       continue;
     }
     kept.push(turn);

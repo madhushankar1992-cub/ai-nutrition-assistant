@@ -7,7 +7,7 @@
  *
  * Usage: npm run test:scope
  */
-import { checkRequest } from "../lib/scopeGuard";
+import { checkRequest, REFUSAL_MESSAGE } from "../lib/scopeGuard";
 import questions from "../data/eval-questions.json";
 
 interface ScopeCase {
@@ -154,6 +154,26 @@ function run(): number {
     );
   }
 
+
+  // Multi-turn cases. Every case above uses an empty history, which is how
+  // two real bugs shipped unnoticed: a cited answer quoting a per-kg figure
+  // locked the conversation, and a refused condition disclosure stopped
+  // guarding the follow-up that depended on it.
+  console.log("\n=== Multi-turn history (guard reads user turns only) ===");
+  const u = (content: string) => ({ role: "user", content });
+  const a = (content: string) => ({ role: "assistant", content });
+  const multiTurn: { label: string; history: { role: string; content: string }[]; message: string; allowed: boolean }[] = [
+    { label: "cited per-kg answer does not lock the thread", history: [u("How much protein does the average adult need daily?"), a("EFSA: 0.83 g of protein per kg of body weight per day.")], message: "Which foods contain vitamin C?", allowed: true },
+    { label: "a refused calorie request does not stick", history: [u("How many calories should I eat per day?"), a(REFUSAL_MESSAGE)], message: "What are the five keys to safer food?", allowed: true },
+    { label: "a refused condition disclosure still guards the follow-up", history: [u("I have diabetes."), a(REFUSAL_MESSAGE)], message: "So what should I eat for breakfast then?", allowed: false },
+    { label: "a target split across two user turns is caught", history: [u("I am trying to lose weight."), a("Here is general guidance.")], message: "so how much energy do I need each day?", allowed: false },
+  ];
+  for (const c of multiTurn) {
+    const result = checkRequest(c.history, c.message);
+    const pass = result.allowed === c.allowed;
+    if (!pass) failures++;
+    console.log(`[${pass ? "PASS" : "FAIL"}] ${c.label}` + (pass ? "" : ` — expected ${c.allowed ? "allowed" : "blocked"}, matched: "${result.matchedText ?? ""}"`));
+  }
   console.log(`\n${failures === 0 ? "All scope-guard checks passed." : `${failures} check(s) failed.`}`);
   return failures;
 }

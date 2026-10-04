@@ -211,11 +211,32 @@ export async function POST(req: NextRequest) {
   try {
     llm = await generateGroundedAnswer(history, formatPassages(retrieval.chunks));
   } catch (err) {
-    await logFailure("invalid_schema", err instanceof Error ? err.message : String(err));
-    const fallback = "Sorry, something went wrong generating a response. Please try again.";
+    // Two different failures used to share one label and one message. Running
+    // out of Groq capacity - the per-minute token budget is spent, so a queued
+    // request outlives the generation deadline, or the daily quota is gone - is
+    // not a malformed response, and telling the user "something went wrong" for
+    // it is untrue. It is now reported as capacity, with a 503 the client can
+    // retry, and logged under its own category so the failure log can tell a
+    // quota problem from a model problem.
+    const message = err instanceof Error ? err.message : String(err);
+    const name = err instanceof Error ? err.name : "";
+    const status = (err as { status?: number } | null)?.status;
+    const atCapacity =
+      name === "AbortError" ||
+      name === "TimeoutError" ||
+      status === 429 ||
+      /rate limit/i.test(message);
+
+    await logFailure(atCapacity ? "capacity" : "invalid_schema", message);
+    const fallback = atCapacity
+      ? "The assistant is at capacity right now. Please try again in a minute."
+      : "Sorry, something went wrong generating a response. Please try again.";
     await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
     return withOwnerCookie(
-      NextResponse.json({ conversationId, answer: fallback, claims: [] }, { status: 422 }),
+      NextResponse.json(
+        { conversationId, answer: fallback, claims: [] },
+        { status: atCapacity ? 503 : 422, headers: atCapacity ? { "Retry-After": "60" } : undefined }
+      ),
       owner
     );
   }
