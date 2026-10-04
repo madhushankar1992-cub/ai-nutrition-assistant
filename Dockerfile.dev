@@ -1,3 +1,7 @@
+# Named Dockerfile.dev, NOT Dockerfile: Railway builds any root-level file
+# named "Dockerfile" automatically, which replaced its own production builder
+# with this local-dev image and broke the deploy (2026-10-04).
+
 # Local development image for the AI Nutrition Assistant.
 #
 # Production does not use this file: Railway builds the app from source on its

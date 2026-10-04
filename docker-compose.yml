@@ -38,7 +38,9 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     env_file:
       - path: .env.local
         required: false
@@ -55,7 +57,9 @@ services:
       - hf-cache:/app/node_modules/@huggingface/transformers/.cache
 
   ingest:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     profiles: ["ingest"]
     env_file:
       - path: .env.local

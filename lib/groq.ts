@@ -5,12 +5,23 @@ import { SYSTEM_PROMPT, SYSTEM_PROMPT_RAG } from "./systemPrompt";
 import { groqRateLimiter, estimateTokens } from "./rateLimiter";
 import { setTimeout as delay } from "node:timers/promises";
 
-const client = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-  // Retries are managed below; SDK retries must not multiply that budget.
-  maxRetries: 0,
-  timeout: 30_000,
-});
+// Created on first use, never at import. The SDK throws when GROQ_API_KEY is
+// missing, and `next build` imports this module while collecting page data -
+// so an eagerly created client failed every build that had no key in its
+// environment (a Docker image build, for one). Requests still fail clearly at
+// call time if the key is absent.
+let groqClient: Groq | null = null;
+function getClient(): Groq {
+  if (!groqClient) {
+    groqClient = new Groq({
+      apiKey: process.env.GROQ_API_KEY,
+      // Retries are managed below; SDK retries must not multiply that budget.
+      maxRetries: 0,
+      timeout: 30_000,
+    });
+  }
+  return groqClient;
+}
 
 // Default: openai/gpt-oss-120b. Override with GROQ_MODEL, e.g. "qwen/qwen3-32b".
 const MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
@@ -87,7 +98,7 @@ async function callOnce(
     await groqRateLimiter.reserve(estimatedTokens, signal);
 
     try {
-      const response = await client.chat.completions.create({
+      const response = await getClient().chat.completions.create({
         model: MODEL,
         max_tokens: MAX_TOKENS,
         temperature: TEMPERATURE,

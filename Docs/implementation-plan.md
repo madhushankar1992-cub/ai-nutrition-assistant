@@ -91,7 +91,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 **Tasks**
 
 - Enable the `pgvector` extension on the Railway Postgres.
-- Add `Document`, `Chunk` (with `embedding vector(1536)`, `restricted`, `configHash`), and `RetrievalRecord` per [rag-architecture.md §21.2](rag-architecture.md).
+- Add `Document`, `Chunk` (with `embedding vector(384)`, `restricted` — later dropped by migration `20261003160000_drop_chunk_restricted` — and `configHash`), and `RetrievalRecord` per [rag-architecture.md §21.2](rag-architecture.md).
 - Add `Claim.chunkId` as a **nullable** FK to `Chunk`.
 - **Leave `Claim.source` in place.** It is dropped in a later release, not this one.
 - Add `lib/retrievalConfig.ts` — one frozen object (chunk target, cap, overlap, embedding model, index type, `k`, sufficiency thresholds) plus its `sha256` prefix.
