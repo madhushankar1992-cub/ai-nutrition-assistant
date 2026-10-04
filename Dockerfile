@@ -1,0 +1,32 @@
+# Local development image for the AI Nutrition Assistant.
+#
+# Production does not use this file: Railway builds the app from source on its
+# own and Vercel builds Next.js natively. This exists so the whole stack - app,
+# Postgres and pgvector - can run on one machine with `docker compose up`.
+
+# Debian, not Alpine: onnxruntime-node (the embedding runtime) ships glibc
+# binaries and does not run on musl.
+FROM node:20-bookworm-slim
+
+# Prisma's query engine needs OpenSSL; slim images do not include it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Dependencies first, so source edits do not invalidate this layer. The Prisma
+# schema has to be present because `postinstall` runs `prisma generate`.
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+# Apply migrations, then serve. `migrate deploy` (never `db push`): the vector
+# column is not modelled in schema.prisma, and db push would drop it.
+CMD ["sh", "-c", "npx prisma migrate deploy && npm start"]

@@ -1,0 +1,74 @@
+# Local stack: the app plus Postgres with pgvector.
+#
+#   docker compose up --build                     # app on http://localhost:3000
+#   docker compose --profile ingest run --rm ingest   # load the corpus (first run)
+#
+# The local database starts EMPTY, so retrieval refuses everything until the
+# ingest service has run once. Ingest scrapes the 7 public sources, so it needs
+# internet access, and takes a few minutes.
+#
+# SAFETY: .env.local contains the PRODUCTION DATABASE_URL. It is read here only
+# for the Groq key; DATABASE_URL is overridden below on every service, and
+# `environment` always wins over `env_file`. Do not remove those overrides.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://postgres:postgres@db:5432/nutrition
+  # Unset, so this container serves its own API instead of forwarding to Railway.
+  BACKEND_API_URL: ""
+  # Local-only signing key for the conversation-ownership cookie.
+  SESSION_SECRET: local-dev-only-not-a-secret
+  VERCEL_OIDC_TOKEN: ""
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nutrition
+    # 5433 on the host, so it does not collide with a Postgres already on 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nutrition"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # The embedding model (~33 MB) downloads on first use; keep it between runs.
+      - hf-cache:/app/node_modules/@huggingface/transformers/.cache
+
+  ingest:
+    build: .
+    profiles: ["ingest"]
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      <<: *app-env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "npx prisma migrate deploy && npm run ingest"]
+    volumes:
+      - hf-cache:/app/node_modules/@huggingface/transformers/.cache
+
+volumes:
+  pgdata:
+  hf-cache:

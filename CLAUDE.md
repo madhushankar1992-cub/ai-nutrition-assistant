@@ -45,6 +45,15 @@ npm run corpus:watch         # fetch each source and report drift; detects, neve
 npm run vectors              # inspect stored chunks and their embeddings
 ```
 
+Local stack with Docker (app + Postgres/pgvector on one machine; production does not use this):
+
+```bash
+docker compose up --build                          # app on http://localhost:3000, db on host port 5433
+docker compose --profile ingest run --rm ingest    # first run only: load the corpus into the empty local db
+```
+
+`docker-compose.yml` reads `.env.local` only for the Groq key. `.env.local` holds the **production** `DATABASE_URL`, so every service overrides `DATABASE_URL` (and blanks `BACKEND_API_URL`) in its `environment` block, which always wins over `env_file`. Never remove those overrides, or a local run writes to production. `.dockerignore` keeps every `.env*` file out of the image.
+
 `DATABASE_URL` must point at a real Postgres instance even for local dev — `prisma/schema.prisma`'s datasource is `postgresql`, not SQLite (a leftover `prisma/dev.db` from earlier SQLite-based development exists but is not what the current schema uses). It must also have the **pgvector** extension available.
 
 **Never run `prisma db push` against a database holding chunks.** `Chunk.embedding` is a `vector(384)` column that Prisma cannot model, so `db push` diffs it against `schema.prisma`, does not find it, and drops it — silently emptying the index until a full re-ingest. This has happened once. Use `prisma migrate deploy`; the column is created by `prisma/migrations/20261003120000_chunk_embedding_vector`.
