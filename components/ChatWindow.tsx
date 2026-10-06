@@ -12,6 +12,7 @@ import {
 } from "./SourcesPanel";
 import { LeafIcon, HeroMark, TrashIcon } from "./icons";
 import type { AnswerMode } from "@/lib/schema";
+import { sendChatRequest } from "@/lib/chatRetry";
 
 // The opening of lib/systemPrompt.ts's OFF_TOPIC_MESSAGE. Copied rather than
 // imported so the prompts are not pulled into the browser bundle; the server
@@ -135,6 +136,7 @@ interface Session {
   selectedId: string | null;
   draft: string;
   isLoading: boolean;
+  retryIn?: number | null;
 }
 
 const STORAGE_KEY = "nutrition-assistant-sessions-v1";
@@ -165,7 +167,7 @@ function loadSessions(): Session[] {
     const parsed = JSON.parse(raw) as Session[];
     if (!Array.isArray(parsed) || !parsed.length) return [];
     // isLoading is never restored: an in-flight request did not survive a reload.
-    return parsed.slice(0, MAX_SESSIONS).map((s) => ({ ...s, isLoading: false }));
+    return parsed.slice(0, MAX_SESSIONS).map((s) => ({ ...s, isLoading: false, retryIn: null }));
   } catch {
     return [];
   }
@@ -374,34 +376,13 @@ export function ChatWindow() {
       draft: "",
       messages: [...s.messages, userMessage],
       isLoading: true,
+      retryIn: null,
       title: s.messages.length === 0 ? titleFrom(content) : s.title,
     }));
 
     try {
-      let res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId, message: content }),
-      });
-
-      // 404 means the server will not accept this conversationId for us: the
-      // owner cookie was cleared or expired while the id lived on in
-      // localStorage, or the thread was opened in another browser profile.
-      // Without this the thread is bricked permanently - every later send gets
-      // the same 404 and the user sees "something went wrong" forever, with no
-      // way back except clearing site data. Retry once as a NEW conversation so
-      // the thread keeps working; prior turns stay visible but are not resent,
-      // which is correct, since the server has refused us access to them.
-      if (res.status === 404 && conversationId) {
-        conversationId = null;
-        res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: content }),
-        });
-      }
-
-      const data: ChatApiPayload = await res.json();
+      const { response: res, data } = await sendChatRequest(content, conversationId,
+        (seconds) => patch(sessionId, (s) => ({ ...s, retryIn: seconds })));
 
       const assistantMessage: SourcedMessage = {
         id: uuidv4(),
@@ -426,6 +407,7 @@ export function ChatWindow() {
         messages: [...s.messages, assistantMessage],
         selectedId: assistantMessage.id,
         isLoading: false,
+        retryIn: null,
       }));
     } catch {
       const errorId = uuidv4();
@@ -444,6 +426,7 @@ export function ChatWindow() {
         ],
         selectedId: errorId,
         isLoading: false,
+        retryIn: null,
       }));
     }
   }
@@ -505,7 +488,16 @@ export function ChatWindow() {
                   onSelect={() => patch(active.id, (s) => ({ ...s, selectedId: m.id }))}
                 />
               ))}
-              {active.isLoading && <TypingIndicator />}
+              {active.isLoading && (
+                <div className="space-y-2">
+                  <TypingIndicator />
+                  {active.retryIn != null && (
+                    <p role="status" className="pl-12 text-sm text-ink-muted">
+                      Busy right now — retrying automatically in {active.retryIn} seconds.
+                    </p>
+                  )}
+                </div>
+              )}
               <div ref={bottomRef} />
             </div>
           )}

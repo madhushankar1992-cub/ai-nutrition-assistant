@@ -55,9 +55,11 @@ interface Entry {
 
 const globalForCache = globalThis as unknown as {
   answerCache?: Map<string, Entry>;
+  pendingAnswers?: Map<string, Promise<void>>;
   corpusVersion?: { value: string; fetchedAt: number };
 };
 const store: Map<string, Entry> = (globalForCache.answerCache ??= new Map());
+const pending = (globalForCache.pendingAnswers ??= new Map());
 
 /** Latest corpus refresh, cached briefly so a lookup costs at most one cheap query. */
 async function corpusVersion(): Promise<string> {
@@ -78,7 +80,40 @@ export function normaliseQuestion(message: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .replace(/[\s?!.]+$/, "")
-    .trim();
+    .trim()
+    .replace(/\b(?:a|each|every) day$/, "per day");
+}
+
+/** Identical concurrent first questions share generation, but each keeps its own owner/persistence. */
+export async function withFirstQuestionLock<T>(
+  message: string, documentKey: string | null | undefined, action: () => Promise<T>
+): Promise<T> {
+  let key: string;
+  try { key = await keyFor(message, documentKey); }
+  catch { return action(); }
+  const previous = pending.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const tail = previous.then(() => gate);
+  pending.set(key, tail);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previous,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("Groq per-minute budget is busy; retry in about 2 s."), { retryAfterSeconds: 2 })), 30_000);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return await action();
+  } finally {
+    if (timer) clearTimeout(timer);
+    // A timed-out follower must not release later followers before the leader finishes.
+    void previous.then(() => {
+      release();
+      if (pending.get(key) === tail) pending.delete(key);
+    });
+  }
 }
 
 async function keyFor(message: string, documentKey: string | null | undefined): Promise<string> {

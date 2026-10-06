@@ -32,6 +32,12 @@ export class RateLimiter {
   private dayRequests = 0;
   private dayTokens = 0;
   private dayResetAt = this.nextUtcMidnight();
+  private blockedUntil = 0;
+
+  /** Honor provider throttling across all callers, not just the failing request. */
+  deferFor(ms: number) {
+    if (Number.isFinite(ms) && ms > 0) this.blockedUntil = Math.max(this.blockedUntil, Date.now() + ms);
+  }
 
   private nextUtcMidnight(): number {
     const now = new Date();
@@ -81,16 +87,22 @@ export class RateLimiter {
 
     for (;;) {
       signal?.throwIfAborted();
+      this.resetDayIfNeeded();
+      if (this.dayRequests + 1 > RPD_LIMIT || this.dayTokens + estimatedTokens > TPD_LIMIT) {
+        throw new Error("Groq daily rate limit would be exceeded. Try again after the daily reset (UTC midnight).");
+      }
       this.pruneMinuteWindow();
       const usedTokens = this.minuteWindow.reduce((sum, r) => sum + r.tokens, 0);
       const usedRequests = this.minuteWindow.length;
 
-      if (usedRequests < RPM_SAFE && usedTokens + estimatedTokens <= TPM_SAFE) {
+      if (Date.now() >= this.blockedUntil && usedRequests < RPM_SAFE && usedTokens + estimatedTokens <= TPM_SAFE) {
         break;
       }
 
       const oldest = this.minuteWindow[0];
-      const waitMs = oldest ? Math.max(oldest.timestamp + 60_000 - Date.now(), 250) : 1000;
+      const minuteWait = usedRequests >= RPM_SAFE || usedTokens + estimatedTokens > TPM_SAFE
+        ? (oldest ? Math.max(oldest.timestamp + 60_000 - Date.now(), 250) : 1000) : 0;
+      const waitMs = Math.max(minuteWait, this.blockedUntil - Date.now(), 250);
 
       // Fail fast rather than queue past the caller's patience. Measured:
       // a second question 8 s after the first waited silently for the
@@ -116,7 +128,7 @@ export class RateLimiter {
     // so the next request is not held back by tokens that were never spent.
     return {
       settle: (actualTokens: number) => {
-        if (!Number.isFinite(actualTokens) || actualTokens <= 0) return;
+        if (!Number.isFinite(actualTokens) || actualTokens < 0) return;
         this.dayTokens = Math.max(0, this.dayTokens + actualTokens - record.tokens);
         record.tokens = actualTokens;
       },

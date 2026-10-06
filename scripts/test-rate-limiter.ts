@@ -39,6 +39,21 @@ async function main() {
   r.settle(500);
   await settling.reserve(TPM_SAFE / 2, undefined, 100); // fits now, no wait
 
+  // A provider rejection used zero inference tokens. Release its token
+  // reservation while keeping the request-count limit in place.
+  const rejected = new RateLimiter();
+  const unused = await rejected.reserve(TPM_SAFE);
+  unused.settle(0);
+  unused.settle(0); // repeated settlement must not refund twice
+  await rejected.reserve(TPM_SAFE, undefined, 100);
+
+  // Provider Retry-After throttles everyone even when token budget is free.
+  const throttled = new RateLimiter();
+  throttled.deferFor(42_000);
+  const throttledAt = Date.now();
+  await assert.rejects(throttled.reserve(1, undefined, 100), /retry in about 42 s/);
+  assert.ok(Date.now() - throttledAt < 500, "provider cooldown must fail without waiting");
+
   console.log("PASS: oversized reservations reject, waits cancel, full budgets fail fast, and settled usage frees budget");
 }
 

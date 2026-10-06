@@ -98,6 +98,11 @@ async function main() {
   let generalAnswer = "For most healthy adults, eggs can be included in a varied diet. Individual needs vary.";
   let groundedAnswer = "Chill cooked food promptly.";
   let groundedClaims: { text: string; chunkId: string }[] = [{ text: "Chill cooked food promptly.", chunkId: "offline-chunk" }];
+  let generalGate: Promise<void> | null = null;
+  let onGeneralEnter: (() => void) | null = null;
+  let groundedSignal: AbortSignal | undefined;
+  let generalSignal: AbortSignal | undefined;
+  let lastGeneralHistory: { role: string; content: string }[] = [];
   const conversations = new Map<string, { id: string; ownerId: string | null }>();
   const messages: { id: string; conversationId: string; role: string; content: string; createdAt: Date }[] = [];
   const chunk = {
@@ -140,8 +145,18 @@ async function main() {
       },
     });
     mockModule("../lib/groq", {
-      generateGeneralAnswer: async () => { generalCalls++; if (generationError) throw generationError; return { answer: generalAnswer, claims: [] }; },
-      generateGroundedAnswer: async () => { groundedCalls++; if (generationError) throw generationError; return { answer: groundedAnswer, claims: groundedClaims }; },
+      generateGeneralAnswer: async (history: { role: string; content: string }[], signal?: AbortSignal) => {
+        generalCalls++; generalSignal = signal; onGeneralEnter?.();
+        lastGeneralHistory = history;
+        if (generationError) throw generationError;
+        if (generalGate) await generalGate;
+        return { answer: generalAnswer, claims: [] };
+      },
+      generateGroundedAnswer: async (_history: unknown, _passages: string, signal?: AbortSignal) => {
+        groundedCalls++; groundedSignal = signal;
+        if (generationError) throw generationError;
+        return { answer: groundedAnswer, claims: groundedClaims };
+      },
     });
     const { POST } = localRequire("../app/api/chat/route") as { POST: (req: NextRequest) => Promise<Response> };
     async function post(payload: unknown, headers: Record<string, string> = {}, raw = false) {
@@ -202,6 +217,77 @@ async function main() {
       const { response } = await post({ message: "How do I cook eggs?", conversationId: first.body.conversationId });
       assert.equal(response.status, 404);
     });
+    await test("daily wording aliases share cache without collapsing different quantities or personal contexts", async () => {
+      const value = { answer: "Eggs can be included in a varied diet.", claims: [], answerMode: "general" as const, retrieval: {} };
+      await setCachedAnswer("How many eggs to eat a day?", null, value);
+      assert.equal((await getCachedAnswer("How many eggs to eat per day?", null))?.answer, value.answer);
+      assert.equal((await getCachedAnswer("How many eggs to eat each day?", null))?.answer, value.answer);
+      assert.equal(await getCachedAnswer("How many eggs to eat per week?", null), null);
+      assert.equal(await getCachedAnswer("I have diabetes. How many eggs to eat per day?", null), null);
+    });
+    await test("capacity failure then same-conversation retry uses first-question cache with strict ownership", async () => {
+      cacheState.answerCache.clear();
+      const question = "How many eggs to eat per day?";
+      generationError = Object.assign(new Error("offline capacity"), { status: 429 });
+      let failed: Awaited<ReturnType<typeof post>>;
+      try { failed = await post({ message: question }); }
+      finally { generationError = null; }
+      assert.equal(failed!.response.status, 503);
+      const cookie = failed!.response.headers.get("set-cookie")!.split(";")[0];
+      const seed = await post({ message: "How many eggs to eat a day?" });
+      assert.equal(seed.body.answerMode, "general");
+      const before = generalCalls + groundedCalls + retrievalCalls;
+      const unrelatedOwner = await post({ message: question, conversationId: failed!.body.conversationId });
+      assert.equal(unrelatedOwner.response.status, 404);
+      const retried = await post({ message: question, conversationId: failed!.body.conversationId }, { cookie });
+      assert.equal(retried.response.status, 200);
+      assert.equal(retried.body.cached, true);
+      assert.equal(retried.body.answer, seed.body.answer);
+      assert.equal(retried.body.conversationId, failed!.body.conversationId);
+      assert.equal(generalCalls + groundedCalls + retrievalCalls, before, "retry should consume no new retrieval/model quota");
+    });
+    await test("real answered history still bypasses cache after a capacity failure and removes only failed attempts", async () => {
+      const first = await post({ message: "What foods are good sources of zinc?" });
+      const cookie = first.response.headers.get("set-cookie")!.split(";")[0];
+      const question = "How many eggs to eat per day?";
+      generationError = Object.assign(new Error("offline capacity"), { status: 429 });
+      try {
+        assert.equal((await post({ message: question, conversationId: first.body.conversationId }, { cookie })).response.status, 503);
+      } finally { generationError = null; }
+      const before = generalCalls;
+      const retry = await post({ message: question, conversationId: first.body.conversationId }, { cookie });
+      assert.equal(retry.response.status, 200);
+      assert.equal(retry.body.cached, undefined);
+      assert.equal(generalCalls, before + 1, "earlier real conversation must remain outside the first-question cache");
+      assert.equal(lastGeneralHistory.length, 3);
+      assert.equal(lastGeneralHistory[0].content, "What foods are good sources of zinc?");
+      assert.equal(lastGeneralHistory[2].content, question);
+      assert.ok(!lastGeneralHistory.some((turn) => turn.content.includes("at capacity")));
+    });
+    await test("concurrent identical first questions generate once and preserve separate owners", async () => {
+      const question = "How should fresh okra be refrigerated?";
+      let release!: () => void;
+      let entered!: () => void;
+      generalGate = new Promise<void>((resolve) => { release = resolve; });
+      const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+      onGeneralEnter = entered;
+      const before = generalCalls;
+      const first = post({ message: question });
+      try {
+        await enteredPromise;
+        const second = post({ message: question });
+        // Let both requests progress far enough to join or independently generate.
+        for (let tick = 0; tick < 8; tick++) await new Promise<void>((resolve) => setImmediate(resolve));
+        release();
+        const [a, b] = await Promise.all([first, second]);
+        assert.equal(a.response.status, 200);
+        assert.equal(b.response.status, 200);
+        assert.equal(a.body.answer, b.body.answer);
+        assert.notEqual(a.body.conversationId, b.body.conversationId);
+        assert.notEqual(a.response.headers.get("set-cookie"), b.response.headers.get("set-cookie"));
+        assert.equal(generalCalls, before + 1, "identical pending first questions must share one generation");
+      } finally { release(); generalGate = null; onGeneralEnter = null; }
+    });
     await test("document-filtered uncovered question never falls back to general", async () => {
       const before = generalCalls;
       const { body } = await post({ message: "What can replace eggs in muffins?", documentKey: CORPUS_SOURCES.find((s) => s.enabled)!.key });
@@ -212,7 +298,9 @@ async function main() {
     await test("empty grounded citations fall back once and report insufficient support", async () => {
       sufficient = true;
       const previous = groundedClaims;
+      const previousAnswer = groundedAnswer;
       groundedClaims = [];
+      groundedAnswer = "The supplied guidance does not specify ordinary egg quantities.";
       try {
         const before = generalCalls;
         const { body } = await post({ message: "How many eggs are commonly eaten daily?" }, { "x-cache-bypass": "1" });
@@ -220,7 +308,32 @@ async function main() {
         assert.equal(body.retrieval?.sufficient, false);
         assert.deepEqual(body.claims, []);
         assert.equal(generalCalls, before + 1);
-      } finally { groundedClaims = previous; sufficient = false; }
+      } finally { groundedClaims = previous; groundedAnswer = previousAnswer; sufficient = false; }
+    });
+    await test("grounded-to-general fallback shares one generation deadline signal", async () => {
+      sufficient = true;
+      const previousClaims = groundedClaims;
+      groundedClaims = [];
+      groundedSignal = undefined; generalSignal = undefined;
+      try {
+        await post({ message: "What can replace eggs when baking a cake?" }, { "x-cache-bypass": "1" });
+        assert.ok((groundedSignal as unknown) instanceof AbortSignal);
+        assert.equal(generalSignal, groundedSignal, "fallback must not reset the request generation deadline");
+      } finally { groundedClaims = previousClaims; sufficient = false; }
+    });
+    await test("genuine model off-topic reply cannot activate general fallback", async () => {
+      sufficient = true;
+      const previousClaims = groundedClaims;
+      const previousAnswer = groundedAnswer;
+      groundedClaims = []; groundedAnswer = OFF_TOPIC_MESSAGE;
+      try {
+        const before = generalCalls;
+        const { body } = await post({ message: "What caused the Industrial Revolution?" }, { "x-cache-bypass": "1" });
+        assert.equal(body.answerMode, "refused");
+        assert.equal(body.answer, OFF_TOPIC_MESSAGE);
+        assert.deepEqual(body.claims, []);
+        assert.equal(generalCalls, before);
+      } finally { groundedClaims = previousClaims; groundedAnswer = previousAnswer; sufficient = false; }
     });
     await test("unsafe claim is suppressed even if summary is safe", async () => {
       sufficient = true;
@@ -332,6 +445,22 @@ async function main() {
       await assert.rejects(limiter.reserve(1, undefined, 10), /budget is full/);
       reservation.settle(100);
       await limiter.reserve(TPM_SAFE - 100, undefined, 10);
+    });
+    await test("rejected provider calls release reserved tokens and provider cooldown applies to other callers", async () => {
+      const released = new RateLimiter();
+      const reservation = await released.reserve(TPM_SAFE);
+      reservation.settle(0);
+      await released.reserve(TPM_SAFE, undefined, 10);
+      const cooling = new RateLimiter();
+      const now = Date.now;
+      const fixed = now();
+      Date.now = () => fixed;
+      try {
+        cooling.deferFor(17_000);
+        await assert.rejects(cooling.reserve(1, undefined, 10), /retry in about 17 s/);
+        Date.now = () => fixed + 17_001;
+        await cooling.reserve(TPM_SAFE, undefined, 10);
+      } finally { Date.now = now; }
     });
     const routeId = localRequire.resolve("../app/api/chat/route");
     const backendRouteModule = localRequire.cache[routeId];

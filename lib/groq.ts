@@ -121,7 +121,8 @@ async function callOnce(
         },
       }, { signal });
 
-      reservation.settle(response.usage?.total_tokens ?? 0);
+      const usedTokens = response.usage?.total_tokens;
+      if (typeof usedTokens === "number") reservation.settle(usedTokens);
 
       const content = response.choices[0]?.message?.content;
       if (!content) {
@@ -142,19 +143,28 @@ async function callOnce(
 
       return parsed.data;
     } catch (err) {
+      // Rejected 429/auth requests produced no inference tokens.
+      // Keeping their full reservation made the retry hit a fictitious local limit.
+      if (err instanceof Groq.RateLimitError || err instanceof Groq.AuthenticationError ||
+        err instanceof Groq.PermissionDeniedError) {
+        reservation.settle(0);
+      }
       signal.throwIfAborted();
       // Transport-level failures (rate limit / transient 5xx / connection drop)
       // are retried with backoff, separately from schema-validation failures
       // (handled by the caller's single retry-with-correction).
       const isRateLimit = err instanceof Groq.RateLimitError;
+      const providerWait = isRateLimit ? (retryAfterMs(err as InstanceType<typeof Groq.RateLimitError>) ?? 2000) : 0;
+      if (isRateLimit) groqRateLimiter.deferFor(providerWait);
       const isRetryableServerError =
         err instanceof Groq.InternalServerError || err instanceof Groq.APIConnectionError;
 
       if ((isRateLimit || isRetryableServerError) && attempt < MAX_TRANSPORT_RETRIES) {
         attempt += 1;
         const backoff = isRateLimit
-          ? (retryAfterMs(err as InstanceType<typeof Groq.RateLimitError>) ?? 2000 * attempt)
+          ? providerWait
           : 1000 * attempt;
+        if (isRateLimit && backoff > MAX_BUDGET_WAIT_MS) throw err;
         await delay(backoff, undefined, { signal });
         continue;
       }
@@ -171,9 +181,9 @@ async function callOnce(
  */
 export async function generateGroundedAnswer(
   history: ConversationTurn[],
-  passages: string
+  passages: string,
+  signal: AbortSignal = AbortSignal.timeout(GENERATION_DEADLINE_MS)
 ): Promise<LlmResponse> {
-  const signal = AbortSignal.timeout(GENERATION_DEADLINE_MS);
   const systemExtra = `REFERENCE PASSAGES — the only material you may answer from:
 
 ${passages}`;
@@ -213,9 +223,9 @@ ${passages}`;
  * deadline apply exactly as for a grounded call.
  */
 export async function generateGeneralAnswer(
-  history: ConversationTurn[]
+  history: ConversationTurn[],
+  signal: AbortSignal = AbortSignal.timeout(GENERATION_DEADLINE_MS)
 ): Promise<LlmResponse> {
-  const signal = AbortSignal.timeout(GENERATION_DEADLINE_MS);
   let result: LlmResponse;
   try {
     result = await callOnce(history, undefined, signal, SYSTEM_PROMPT_GENERAL);

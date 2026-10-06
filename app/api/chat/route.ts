@@ -9,7 +9,8 @@ import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
 import { warmUp } from "@/lib/corpus/embeddings";
-import { getCachedAnswer, setCachedAnswer, PROMPT_VERSION } from "@/lib/answerCache";
+import { getCachedAnswer, setCachedAnswer, PROMPT_VERSION, withFirstQuestionLock } from "@/lib/answerCache";
+import { answeredHistory } from "@/lib/chatHistory";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
 import { getSource } from "@/lib/corpus/sources";
 import { generationError } from "@/lib/chatErrors";
@@ -135,7 +136,7 @@ async function generationFailure(
   }
   return withOwnerCookie(
     NextResponse.json(
-      { conversationId, answer: failure.answer, claims: [], retryAfterSeconds: failure.retryAfterSeconds },
+      { conversationId, answer: failure.answer, claims: [], errorCode: failure.category, retryAfterSeconds: failure.retryAfterSeconds },
       { status: failure.status, headers: failure.status === 503 ? { "Retry-After": String(failure.retryAfterSeconds) } : undefined }
     ),
     owner
@@ -241,7 +242,8 @@ async function handlePost(req: NextRequest) {
   // `x-cache-bypass: 1` forces a fresh answer and skips storing it. The
   // evaluation sends it: it asks each question three times to measure the
   // model's consistency, and cache hits would make that check meaningless.
-  const firstTurn = priorMessages.length === 0 && req.headers.get("x-cache-bypass") !== "1";
+  const completedHistory = answeredHistory(priorMessages);
+  const firstTurn = completedHistory.length === 0 && req.headers.get("x-cache-bypass") !== "1";
 
   // 2. Scope guard — FIRST, before embedding, retrieval or any model call.
   //
@@ -277,6 +279,7 @@ async function handlePost(req: NextRequest) {
   }
 
   // 2b. Answer cache: a repeated first question is served without a Groq call.
+  const generateForRequest = async () => {
   // Refusals above never reach here, and the cache only holds successful
   // grounded or general answers keyed to the current prompts, config and corpus.
   if (firstTurn) {
@@ -327,9 +330,10 @@ async function handlePost(req: NextRequest) {
   }
 
   const history: ConversationTurn[] = [
-    ...priorMessages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    ...completedHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
     { role: "user", content: message },
   ];
+  const generationSignal = AbortSignal.timeout(Number(process.env.GENERATION_DEADLINE_MS) || 45_000);
 
   // 4. Sufficiency gate. The model is never asked to write a GROUNDED answer
   // from thin material: given weak passages a capable model writes a confident
@@ -351,7 +355,7 @@ async function handlePost(req: NextRequest) {
     // limiter and the generation deadline apply to it like any other call.
     let general;
     try {
-      general = await generateGeneralAnswer(history);
+      general = await generateGeneralAnswer(history, generationSignal);
     } catch (err) {
       return generationFailure(err, conversationId, owner);
     }
@@ -444,7 +448,7 @@ async function handlePost(req: NextRequest) {
 
   let llm;
   try {
-    llm = await generateGroundedAnswer(history, formatPassages(retrieval.chunks));
+    llm = await generateGroundedAnswer(history, formatPassages(retrieval.chunks), generationSignal);
   } catch (err) {
     return generationFailure(err, conversationId, owner);
   }
@@ -578,6 +582,15 @@ async function handlePost(req: NextRequest) {
     });
   }
   return withOwnerCookie(NextResponse.json(responseBody), owner);
+  };
+  try {
+    return firstTurn
+      ? await withFirstQuestionLock(message, documentKey, generateForRequest)
+      : await generateForRequest();
+  } catch (err) {
+    if (generationError(err).category === "capacity") return generationFailure(err, conversationId, owner);
+    throw err;
+  }
 }
 
 /**
