@@ -1,6 +1,20 @@
 # Guardrail and release audit — 2026-10-07
 
-Release status: verification in progress; production deployment is not yet verified.
+Release status: functional delivery and both production deployments verified. Existing dependency security remediation remains outstanding, separately from the passing guardrail audit.
+
+## Verified production release
+
+- Source release: `9425436` (includes and supersedes `9020f82`). Pushed to `master`.
+- Railway: deployment `b8404826-1652-406e-b4bb-29a04649c814`, `SUCCESS`, explicitly built from the tested source.
+- Vercel: deployment `dpl_9qfUu3jmnD3UncV7ef6K9drowErz`, `READY`, production alias [ai-nutrition-assistant-self.vercel.app](https://ai-nutrition-assistant-self.vercel.app).
+- Both live health endpoints: HTTP 200, prompt fingerprint `c23893d721ab`, corpus 7 documents / 226 chunks / 226 embedded, retrieval config `b63742d51a`.
+- Full production API audit: **16/16 passed, 0 failed**. The exact uncached eggs question returned a substantive general answer in 7.37 seconds. Nine explicit refusal cases, semantic unrelated content, general cuisine, Hindi food, grounded citations, cached replay and ownership all passed.
+- Cached repeat: returned the same first-question answer with `cached: true` in 1.02 seconds; a different owner received 404.
+- Actual browser smoke: a broccoli poem request was refused with the off-topic badge; a new eggs question displayed its substantive answer and the general-knowledge/no-citations label. Browser console error log was empty. Screenshot capture was unavailable; verification used the visible accessibility state and API evidence.
+- Master delivery agent independently accepted the release. Both salt claims were matched to the exact retrieved passages and publishers.
+- Environment file hashes remained unchanged after release, and the remote/local Groq key comparison matched without displaying either key.
+
+Audit command: run `scripts/audit-chat.ts` with `AUDIT_BASE_URL` set to the production frontend. The script paces fresh calls for the existing quota, bypasses cache when checking generation, records retryable failures, omits cookies/conversation IDs from saved evidence, and deletes only its own test conversations. Documentation-only completion updates do not need another application deployment.
 
 ## Findings and fixes
 
@@ -31,3 +45,9 @@ Railway service inspection found no linked source repository, contrary to the pr
 The existing Groq plan's shared quota is a real provider limit. Caching and early refusals conserve quota; new distinct questions can still receive retryable capacity responses. No plan, model/provider, host topology, Docker safeguards or corpus configuration is changed. Local environment files and the updated Groq key remain untouched. The short-lived corpus-version cache and process-local limiter/cache retain their existing deployment limitations.
 
 Credential comparison, without printing either key, confirmed Railway's existing key matches the updated local key. Its backend proxy remains disabled and its model matches the existing local choice. No credential update or setup change was necessary.
+
+## Existing dependency alerts
+
+A separate read-only `npm audit --omit=dev` reports four affected production packages: Next.js (critical), PostCSS and source-map-js (high), and UUID (moderate). The build's broader count of 14 includes development packages. These are package-level advisory results, not proof that every exploit applies to this app.
+
+Installed Next.js 14.2.35 falls within published advisory ranges, including [the AVIF image-optimizer advisory](https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4). Review found no image-upload feature, external image patterns, or `next/image` imports, so that specific exploit chain is not established. Some Server Component denial-of-service advisories still cover the App Router framework. Dependency remediation remains incomplete; this guardrail audit does not claim the app is fully secure. The suggested Next.js update is a major framework change, which is deferred to preserve the explicitly requested setup and needs separate compatibility testing.

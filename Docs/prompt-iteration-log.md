@@ -18,6 +18,12 @@ independent route checks: 33/33. This is a guardrail/behavior measurement, not a
 new three-attempt numeric-drift evaluation. See [guardrail-audit.md](guardrail-audit.md)
 for release verification and remaining provider-capacity limitations.
 
+Production release `9425436` subsequently passed all 16 live API audit checks;
+both hosts report prompt fingerprint `c23893d721ab`. The exact uncached eggs
+question passed in 7.37 seconds. Browser smoke verified the general-knowledge
+label and refusal of a food-themed writing task. The master delivery review
+accepted the functional release; dependency security alerts remain separate.
+
 > **Status as of 2026-10-06:** this logs the Milestone 1 prompt iteration (prompt versions `7939902e9b` → `eabb1ca8b1`). Later prompt changes were not run through this harness: `SYSTEM_PROMPT_RAG` (Milestone 2), the 2026-10-04 scope and population-framing fixes, and `SYSTEM_PROMPT_GENERAL` (2026-10-06). Their measurements are in [retrieval-report.md](retrieval-report.md) and the commit history.
 
 Documents each `systemPrompt.ts` change and its measured before/after effect on `npm run eval`, per implementation-plan.md Phase 9. Raw logs: [failure-log-before-iteration.md](failure-log-before-iteration.md) (baseline) and [failure-log.md](failure-log.md) (current).
