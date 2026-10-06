@@ -63,6 +63,9 @@ async function callChat(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      // Always a fresh answer: the 3x consistency check measures the model,
+      // and the server's answer cache would otherwise replay attempt 1.
+      "x-cache-bypass": "1",
       ...(sessionCookie ? { cookie: sessionCookie } : {}),
     },
     body: JSON.stringify({ conversationId, message }),

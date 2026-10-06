@@ -9,6 +9,7 @@ import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
 import { warmUp } from "@/lib/corpus/embeddings";
+import { getCachedAnswer, setCachedAnswer } from "@/lib/answerCache";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
 import { getSource } from "@/lib/corpus/sources";
 
@@ -53,6 +54,8 @@ async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResp
     headers: {
       "Content-Type": "application/json",
       ...(cookie ? { cookie } : {}),
+      // Forward the evaluation's cache bypass, so it holds through the proxy.
+      ...(req.headers.get("x-cache-bypass") === "1" ? { "x-cache-bypass": "1" } : {}),
     },
     body,
   });
@@ -216,6 +219,12 @@ export async function POST(req: NextRequest) {
     where: { conversationId },
     orderBy: { createdAt: "asc" },
   });
+  // Only a conversation's first question can be answered from cache: with
+  // history, the same words can mean something different.
+  // `x-cache-bypass: 1` forces a fresh answer and skips storing it. The
+  // evaluation sends it: it asks each question three times to measure the
+  // model's consistency, and cache hits would make that check meaningless.
+  const firstTurn = priorMessages.length === 0 && req.headers.get("x-cache-bypass") !== "1";
 
   // 2. Scope guard — FIRST, before embedding, retrieval or any model call.
   //
@@ -247,6 +256,40 @@ export async function POST(req: NextRequest) {
       }),
       owner
     );
+  }
+
+  // 2b. Answer cache: a repeated first question is served without a Groq call.
+  // Refusals above never reach here, and the cache only holds successful
+  // grounded or general answers keyed to the current prompts, config and corpus.
+  if (firstTurn) {
+    const cached = await getCachedAnswer(message, documentKey);
+    if (cached) {
+      const cachedClaims = cached.claims as Claim[];
+      const cachedMessage = await prisma.message.create({
+        data: { conversationId, role: "assistant", content: cached.answer },
+      });
+      if (cachedClaims.length > 0) {
+        await prisma.claim.createMany({
+          data: cachedClaims.map((c) => ({
+            messageId: cachedMessage.id,
+            text: c.text,
+            source: c.source ? JSON.stringify(c.source) : null,
+            chunkId: c.source?.chunkId ?? null,
+          })),
+        });
+      }
+      return withOwnerCookie(
+        NextResponse.json({
+          conversationId,
+          answer: cached.answer,
+          claims: cachedClaims,
+          answerMode: cached.answerMode,
+          retrieval: cached.retrieval,
+          cached: true,
+        }),
+        owner
+      );
+    }
   }
 
   // 3. Retrieve. Embedding failure is a HARD failure: there is deliberately no
@@ -327,6 +370,14 @@ export async function POST(req: NextRequest) {
     await prisma.message.create({
       data: { conversationId, role: "assistant", content: generalAnswer },
     });
+    if (firstTurn && generalMode === "general") {
+      await setCachedAnswer(message, documentKey, {
+        answer: generalAnswer,
+        claims: [],
+        answerMode: "general",
+        retrieval: retrievalBlock,
+      });
+    }
     // claims is ALWAYS empty here: there are no retrieved passages a claim
     // could be bound to, so any citation would be fabricated.
     return withOwnerCookie(
@@ -474,8 +525,7 @@ export async function POST(req: NextRequest) {
   // 9. Respond. The envelope is unchanged from Milestone 1; `retrieval` and
   // `answerMode` are added alongside, so an older client keeps working and
   // simply ignores them.
-  return withOwnerCookie(
-    NextResponse.json({
+  const responseBody = {
     conversationId,
     answer,
     claims,
@@ -500,9 +550,16 @@ export async function POST(req: NextRequest) {
       })),
       configVersion: RETRIEVAL_CONFIG_HASH,
     },
-  }),
-    owner
-  );
+  };
+  if (firstTurn && answerMode === "grounded" && !suppressed) {
+    await setCachedAnswer(message, documentKey, {
+      answer,
+      claims,
+      answerMode: "grounded",
+      retrieval: responseBody.retrieval,
+    });
+  }
+  return withOwnerCookie(NextResponse.json(responseBody), owner);
 }
 
 /**
