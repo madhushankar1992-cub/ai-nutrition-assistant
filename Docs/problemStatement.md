@@ -388,6 +388,8 @@ Both are required, and they are different mechanisms with different messages.
 
 **The near-miss case belongs to the not-in-corpus refusal.** A question worded to match a nearly-correct section — children's requirements, when the corpus covers adults — retrieves chunks with high surface similarity and the wrong scope. Answering from them is a retrieval failure dressed as a confident answer, and is the single most likely way this milestone fails quietly.
 
+> **Scope extended by the owner (2026-10-06).** This brief is grounded-only: anything the corpus does not cover is refused. The project owner has since extended the scope beyond it, so the assistant answers any food, nutrition, cooking or food-safety question from anywhere in the world. Questions the corpus covers are still answered from it, with citations, exactly as specified here. When the sufficiency gate fails, a second, clearly labelled **general-knowledge tier** answers from model knowledge with **no citations** (`answerMode: "general"`). The not-in-corpus refusal remains only when the user restricts the search to one document. Out-of-scope refusals (calorie and weight targets, medical advice) and off-topic refusals are unchanged and apply to both tiers. See `Docs/rag-architecture.md` §15.2.
+
 #### 7. Filling in the Shell
 
 Don't rebuild the frontend or backend. The sources panel left empty in Milestone 1 now shows the chunks behind each answer. The `source` field on every claim carries a real citation instead of `null`.

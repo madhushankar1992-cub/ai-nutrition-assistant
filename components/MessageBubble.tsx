@@ -1,6 +1,6 @@
 "use client";
 
-import type { Claim } from "@/lib/schema";
+import type { AnswerMode, Claim } from "@/lib/schema";
 import { LeafIcon, SourcesIcon } from "./icons";
 
 export interface ChatMessage {
@@ -8,6 +8,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   claims?: Claim[];
+  /** Which tier answered. Absent on replies stored before 2026-10-06. */
+  answerMode?: AnswerMode | null;
 }
 
 const SELECTED_SHADOW =
@@ -46,6 +48,14 @@ export function MessageBubble({
           selected ? SELECTED_SHADOW : REST_SHADOW
         }`}
       >
+        {message.answerMode === "general" && (
+          // General-tier answers are written from model knowledge, not from the
+          // cited documents. The label sits above the text so it is read first.
+          <span className="mb-2.5 inline-flex items-center gap-1.5 rounded-full border border-sky-400/35 bg-sky-400/[0.08] px-2.5 py-1 text-[11px] font-medium text-sky-300">
+            <span aria-hidden="true">i</span>
+            General knowledge — not from the cited official documents
+          </span>
+        )}
         <p className="whitespace-pre-wrap">{message.content}</p>
         {message.claims && message.claims.length > 0 && (
           <span className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11.5px] font-medium text-ink-muted">

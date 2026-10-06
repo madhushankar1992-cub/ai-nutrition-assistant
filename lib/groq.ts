@@ -1,7 +1,7 @@
 import Groq from "groq-sdk";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { LlmResponseSchema, type LlmResponse } from "./schema";
-import { SYSTEM_PROMPT_RAG } from "./systemPrompt";
+import { SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_RAG } from "./systemPrompt";
 import { groqRateLimiter, estimateTokens } from "./rateLimiter";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -69,13 +69,13 @@ function retryAfterMs(err: InstanceType<typeof Groq.RateLimitError>): number | n
 async function callOnce(
   history: ConversationTurn[],
   systemExtra?: string,
-  signal: AbortSignal = AbortSignal.timeout(45_000)
+  signal: AbortSignal = AbortSignal.timeout(45_000),
+  basePrompt: string = SYSTEM_PROMPT_RAG
 ): Promise<any> {
   // Grounded calls carry retrieved passages, which dominate the token budget,
   // so history is trimmed hard: retrieval already supplies the grounding that
   // history was partly serving.
   const trimmedHistory = history.slice(-MAX_HISTORY_TURNS);
-  const basePrompt = SYSTEM_PROMPT_RAG;
   const messages = [
     {
       role: "system" as const,
@@ -189,4 +189,45 @@ ${passages}`;
       signal
     );
   }
+}
+
+/**
+ * General-knowledge generation (the second tier, added 2026-10-06).
+ *
+ * Called ONLY when retrieval fails the sufficiency gate. The model sees no
+ * passages and answers food, nutrition, cooking and food-safety questions from
+ * general knowledge under SYSTEM_PROMPT_GENERAL, which carries the same topic
+ * restriction, out-of-scope rules and population framing as the grounded tier.
+ *
+ * It is held to the same structured-output schema, but `claims` is forced to
+ * an empty list here regardless of what the model emits: with no retrieved
+ * passages there is nothing a claim could be bound to, so a citation on a
+ * general answer could only be fabricated. The rate limiter and the generation
+ * deadline apply exactly as for a grounded call.
+ */
+export async function generateGeneralAnswer(
+  history: ConversationTurn[]
+): Promise<LlmResponse> {
+  const signal = AbortSignal.timeout(GENERATION_DEADLINE_MS);
+  let result: LlmResponse;
+  try {
+    result = await callOnce(history, undefined, signal, SYSTEM_PROMPT_GENERAL);
+  } catch (err) {
+    if (!(err instanceof SchemaValidationError)) throw err;
+    result = await callOnce(
+      [
+        ...history,
+        {
+          role: "user",
+          content:
+            "Your previous response did not match the required schema. Respond again " +
+            'with valid JSON: `answer` (string) and `claims` (an empty array).',
+        },
+      ],
+      undefined,
+      signal,
+      SYSTEM_PROMPT_GENERAL
+    );
+  }
+  return { answer: result.answer, claims: [] };
 }

@@ -116,6 +116,15 @@ const BENIGN_COUNTER_EXAMPLES = [
   "What is the DASH diet?",
   "What does a ketogenic diet typically involve?",
   "Is 150 lbs a normal weight for a golden retriever?",
+  // General-tier questions (added 2026-10-06): ordinary food questions from
+  // anywhere in the world that the corpus does not cover. The pre-call guard
+  // must let them through to the general-knowledge tier.
+  "What are the health benefits of bananas?",
+  "Is brown rice healthier than white rice?",
+  "How is kimchi traditionally fermented in Korea?",
+  "What is jollof rice?",
+  "Is it safe to eat street food in Bangkok?",
+  "What is the nutritional value of injera?",
 ];
 
 function run(): number {

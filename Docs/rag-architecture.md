@@ -596,6 +596,23 @@ Three defences, in order:
 
 This section is the known-weakest part of the architecture, and is recorded as such rather than presented as solved.
 
+### 15.2 General-knowledge tier (added 2026-10-06)
+
+**What changed.** The owner extended the scope: the assistant now answers any food, nutrition, cooking or food-safety question from anywhere in the world, not only questions the seven documents cover. A failed sufficiency gate no longer ends in the not-in-corpus refusal. Instead the route makes a second, separate Groq call with `SYSTEM_PROMPT_GENERAL` (`generateGeneralAnswer` in `lib/groq.ts`), which answers from general knowledge.
+
+**What did not change.** The gate itself is untouched, so the model is still never asked to write a *grounded, cited* answer from thin passages. The grounded tier, citation binding and claims are unchanged. The pre-call scope guard still runs first, so calorie targets, weight targets and medical advice are refused before retrieval or generation in either tier. The post-call `checkResponse` guard runs on general answers too. A retrieval *failure* (embedding or store down) is still a hard 503, with no fallback to model knowledge. The gate decides between the tiers; a broken library is not a gap in it.
+
+**The trade-off, stated plainly.**
+
+- **General answers carry no citations.** `claims` is always `[]`. The model is held to the same structured-output schema, but the server discards any claims it emits, because with no retrieved passages a citation could only be fabricated. "The model selects, the server cites" therefore still holds: there is nothing to select from.
+- **They are clearly labelled.** The response carries `answerMode: "grounded" | "general" | "refused"`. The UI puts a badge, "General knowledge — not from the cited official documents", on general replies, and the Sources panel explains why there are no sources instead of showing an empty list.
+- **They are less trustworthy than grounded answers.** They come from model knowledge, so they can be wrong in ways a citation would have exposed. The prompt requires mainstream facts only, stated uncertainty, no invented statistics, no calorie figures and no named documents.
+- **Off-topic stays refused in both tiers.** `SYSTEM_PROMPT_GENERAL` carries the full `TOPIC_RESTRICTION`, including the food-framing rule ("a Python script to count calories") and the injection rule ("ignore your rules…"). A reply containing `OFF_TOPIC_MESSAGE` is normalised to exactly that message and labelled `refused`, never `general`.
+- **Filtered mode keeps the refusal.** When `documentKey` restricts the search to one document and that document does not cover the question, the not-in-corpus reply stands. The user asked what *that document* says, and a general answer would misrepresent it.
+- **Cost.** The general tier is one extra Groq call, made only when the gate fails, under the same rate limiter and generation deadline. It adds latency only on uncovered questions.
+
+The retrieval metrics are unaffected. `npm run eval:retrieval`'s adversarial `not_in_corpus` cases assert `retrieve().sufficient === false`, which is the gate's decision and not the route's reply. A coverage gap is still logged as `not_in_corpus` in the failure log before the general tier answers.
+
 ## 16. Step 5 — Prompt composition
 
 `SYSTEM_PROMPT_RAG` is a **second** exported prompt in `lib/systemPrompt.ts`, not an edit of the first. The M1 prompt stays so the before/after comparison can still be run against it. *(As built: the M1 prompt and its ungrounded code path were removed on 2026-10-04 once nothing called them; `SYSTEM_PROMPT_RAG` is now the only prompt. The M1 text remains in git history.)*
@@ -744,7 +761,8 @@ Milestone 2 `[TO BUILD]` — identical shape, `source` populated, `retrieval` **
 |---|---|---|
 | Normal answer | 200 | As above |
 | Out-of-scope refusal | 200 | Fixed `REFUSAL_MESSAGE`, `claims: []`, **no** `retrieval` block |
-| Not-in-corpus refusal `[TO BUILD]` | 200 | `NOT_IN_CORPUS` message, `claims: []`, `retrieval.documentsSearched` populated so the answer can name what it searched |
+| Not-in-corpus refusal `[TO BUILD]` | 200 | `NOT_IN_CORPUS` message, `claims: []`, `retrieval.documentsSearched` populated so the answer can name what it searched. Since 2026-10-06 only in filtered mode (`documentKey` set); see §15.2 |
+| General-knowledge answer (2026-10-06) | 200 | `answerMode: "general"`, `claims: []`, `retrieval.sufficient: false`. Answered from model knowledge when the gate fails in all-documents mode |
 | Invalid request body | 400 | `{ "error": "Invalid request" }` |
 | Schema validation failed after retry | 422 | Generic apology; logged as `invalid_schema` |
 

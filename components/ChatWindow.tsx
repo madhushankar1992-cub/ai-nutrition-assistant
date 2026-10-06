@@ -11,6 +11,12 @@ import {
   type SourcedMessage,
 } from "./SourcesPanel";
 import { LeafIcon, HeroMark, TrashIcon } from "./icons";
+import type { AnswerMode } from "@/lib/schema";
+
+// The opening of lib/systemPrompt.ts's OFF_TOPIC_MESSAGE. Copied rather than
+// imported so the prompts are not pulled into the browser bundle; the server
+// always sends the exact message, so a prefix match is enough.
+const OFF_TOPIC_PREFIX = "I only answer questions about food, nutrition, cooking and food safety.";
 
 const SUGGESTED_QUESTIONS = [
   "How much vitamin C do I need per day?",
@@ -40,7 +46,7 @@ function Header({
             AI Nutrition Assistant
           </h1>
           <p className="hidden truncate text-[12.5px] text-ink-muted sm:block">
-            Answers grounded in official dietary guidance, with citations
+            Cited answers from official guidance, general food knowledge where it is silent
           </p>
         </div>
       </div>
@@ -174,7 +180,10 @@ interface ChatApiPayload {
   conversationId?: string;
   answer?: string;
   claims?: SourcedMessage["claims"];
+  /** Which tier answered (added 2026-10-06). Older servers omit it. */
+  answerMode?: AnswerMode;
   retrieval?: {
+    mode?: "all" | "filtered";
     sufficient?: boolean;
     reason?: string;
     documentsSearched?: { name: string; publisher: string; year: number }[];
@@ -211,12 +220,24 @@ function citedPassages(payload: ChatApiPayload): RetrievedPassage[] {
  *   - The post-call scope guard returns a sufficient retrieval but withholds
  *     the passages, so `chunks` is empty — that is a policy refusal too, and
  *     must not be shown as a corpus gap.
+ *
+ * Since the general tier (2026-10-06) an insufficient retrieval no longer
+ * means a refusal on its own: `answerMode` says which tier answered. A
+ * general answer is not a refusal at all, and an off-topic reply is labelled
+ * as such rather than as a coverage gap.
  */
 function classifyRefusal(ok: boolean, payload: ChatApiPayload): RefusalKind | null {
   if (!ok) return "error";
   if ((payload.claims ?? []).length > 0) return null;
+  if (payload.answerMode === "general") return null;
+  if ((payload.answer ?? "").startsWith(OFF_TOPIC_PREFIX)) return "off_topic";
   const r = payload.retrieval;
   if (!r) return "policy";
+  // A refused reply after an unfiltered search is the post-call guard
+  // withholding a general answer: policy, not a corpus gap.
+  if (payload.answerMode === "refused" && r.sufficient === false && r.mode !== "filtered") {
+    return "policy";
+  }
   if (r.sufficient === false) return "coverage";
   if (Array.isArray(r.chunks) && r.chunks.length === 0) return "policy";
   return null;
@@ -387,6 +408,7 @@ export function ChatWindow() {
         role: "assistant",
         content: data.answer ?? "Sorry, something went wrong.",
         claims: data.claims ?? [],
+        answerMode: data.answerMode ?? null,
         retrieval: data.retrieval
           ? {
               sufficient: data.retrieval.sufficient !== false,

@@ -61,16 +61,87 @@ export interface RetrievalInfo {
  *              not cover the question.
  *   error    — the request failed (retrieval or generation), which is neither.
  */
-export type RefusalKind = "policy" | "coverage" | "error";
+export type RefusalKind = "policy" | "coverage" | "off_topic" | "error";
 
 export interface SourcedMessage extends ChatMessage {
   retrieval?: RetrievalInfo | null;
   refusal?: RefusalKind | null;
 }
 
+/**
+ * A general-tier answer (added 2026-10-06): the official documents did not
+ * cover the question, so it was answered from general knowledge. It has no
+ * sources by design, and the panel says so rather than showing an empty list.
+ */
+function GeneralKnowledgeNotice({ message }: { message: SourcedMessage }) {
+  const searched = message.retrieval?.documentsSearched ?? [];
+  return (
+    <div className="rounded-2xl border border-sky-400/30 bg-sky-400/[0.06] p-4">
+      <div className="flex items-center gap-2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full border border-sky-300/55 text-[11px] font-bold text-sky-300">
+          i
+        </span>
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-sky-300">
+          General knowledge · no citations
+        </span>
+      </div>
+      <p className="mt-2.5 text-[12.5px] leading-relaxed text-ink-muted">
+        The official guidance documents did not cover this question closely enough to
+        quote, so this answer was written from general food and nutrition knowledge.
+        It is not drawn from, and is not endorsed by, any of the cited documents.
+      </p>
+      <p className="mt-2 text-[11.5px] leading-relaxed text-ink-faint">
+        Treat it as general information. For anything important, check an official
+        source or a qualified professional.
+      </p>
+      {searched.length > 0 && (
+        <>
+          <p className="mt-3 text-[10.5px] font-semibold uppercase tracking-wider text-ink-faint">
+            Documents searched first
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {searched.map((d, i) => (
+              <li key={i} className="text-[11.5px] leading-snug text-ink-muted">
+                {d.name}
+                <span className="text-ink-faint">
+                  {" "}
+                  — {d.publisher} {d.year}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RefusalNotice({ message }: { message: SourcedMessage }) {
   const kind = message.refusal;
   const searched = message.retrieval?.documentsSearched ?? [];
+
+  if (message.answerMode === "general") {
+    return <GeneralKnowledgeNotice message={message} />;
+  }
+
+  if (kind === "off_topic") {
+    return (
+      <div className="rounded-2xl border border-amber-400/35 bg-amber-400/[0.07] p-4">
+        <div className="flex items-center gap-2">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full border border-amber-300/60 text-[11px] font-bold text-amber-300">
+            !
+          </span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300">
+            Off topic · refused
+          </span>
+        </div>
+        <p className="mt-2.5 text-[12.5px] leading-relaxed text-ink-muted">
+          This assistant only answers questions about food, nutrition, cooking and food
+          safety. Questions on other subjects are declined, however they are phrased.
+        </p>
+      </div>
+    );
+  }
 
   if (kind === "policy") {
     return (

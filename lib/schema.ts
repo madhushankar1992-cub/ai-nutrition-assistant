@@ -29,9 +29,21 @@ export const ClaimSchema = z.object({
   source: CitationSchema.nullable(),
 });
 
+/**
+ * Which tier produced a reply (added 2026-10-06, alongside the existing
+ * fields — nothing was renamed or removed):
+ *   grounded — answered from retrieved passages, with citations.
+ *   general  — retrieval did not cover the question; answered from general
+ *              knowledge, with NO citations (claims is always empty).
+ *   refused  — scope guard, off-topic, or a document-filtered coverage gap.
+ */
+export const AnswerModeSchema = z.enum(["grounded", "general", "refused"]);
+export type AnswerMode = z.infer<typeof AnswerModeSchema>;
+
 export const ChatResponseSchema = z.object({
   answer: z.string().min(1),
   claims: z.array(ClaimSchema),
+  answerMode: AnswerModeSchema.optional(),
 });
 
 // What the MODEL is allowed to emit.

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { ChatRequestSchema, type Claim } from "@/lib/schema";
+import { ChatRequestSchema, type AnswerMode, type Claim } from "@/lib/schema";
 import { checkRequest, checkResponse, REFUSAL_MESSAGE } from "@/lib/scopeGuard";
-import { generateGroundedAnswer, type ConversationTurn } from "@/lib/groq";
+import { generateGeneralAnswer, generateGroundedAnswer, type ConversationTurn } from "@/lib/groq";
+import { OFF_TOPIC_MESSAGE } from "@/lib/systemPrompt";
 import { formatPassages, retrieve } from "@/lib/retrieval";
 import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
@@ -67,15 +68,71 @@ async function logFailure(category: string, detail: string) {
   }
 }
 
+/**
+ * True when the model gave the off-topic refusal. Both tiers' prompts tell the
+ * model to reply with exactly OFF_TOPIC_MESSAGE; matching its distinctive
+ * opening sentence (whitespace-normalised) also catches a reply that wraps the
+ * message in extra words, which is then replaced with the exact message.
+ */
+function isOffTopicReply(answer: string): boolean {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  return norm(answer).includes(norm(OFF_TOPIC_MESSAGE.split(". ")[0]));
+}
+
+/**
+ * Turns a generation failure (either tier) into an honest response: running
+ * out of Groq capacity is a 503 the client can retry, anything else a 422.
+ */
+async function generationFailure(
+  err: unknown,
+  conversationId: string,
+  owner: OwnerResult
+): Promise<NextResponse> {
+  // Two different failures used to share one label and one message. Running
+  // out of Groq capacity - the per-minute token budget is spent, so a queued
+  // request outlives the generation deadline, or the daily quota is gone - is
+  // not a malformed response, and telling the user "something went wrong" for
+  // it is untrue. It is reported as capacity, with a 503 the client can retry,
+  // and logged under its own category so the failure log can tell a quota
+  // problem from a model problem.
+  const message = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error ? err.name : "";
+  const status = (err as { status?: number } | null)?.status;
+  const atCapacity =
+    name === "AbortError" ||
+    name === "TimeoutError" ||
+    status === 429 ||
+    // The local limiter's own refusals, e.g. "exceeds the per-minute budget".
+    /rate limit|per-minute budget/i.test(message);
+
+  await logFailure(atCapacity ? "capacity" : "invalid_schema", message);
+  const fallback = atCapacity
+    ? "The assistant is at capacity right now. Please try again in a minute."
+    : "Sorry, something went wrong generating a response. Please try again.";
+  await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
+  return withOwnerCookie(
+    NextResponse.json(
+      { conversationId, answer: fallback, claims: [] },
+      { status: atCapacity ? 503 : 422, headers: atCapacity ? { "Retry-After": "60" } : undefined }
+    ),
+    owner
+  );
+}
+
+// The model sometimes copies tool-style citation markers ("【PASSAGE 1†L3】")
+// into its text. Citations are built server-side from the database, so the
+// markers are noise the user should never see.
+const stripMarkers = (text: string) => text.replace(/[ \t]*【[^】]*】/g, "").trim();
+
 function notInCorpusMessage(docs: { name: string; publisher: string; year: number }[]): string {
   if (!docs.length) {
     return "I couldn't find anything in the guidance I searched that covers this. I only answer from official public dietary guidance documents.";
   }
   const list = docs.map((d) => `${d.name} (${d.publisher}, ${d.year})`).join("; ");
-  // Off-topic questions also land here: retrieval finds nothing relevant, so the
-  // sufficiency gate answers before the model can give its off-topic message.
-  // The wording therefore states the assistant's scope as well as the coverage
-  // gap, so the user gets one consistent explanation either way.
+  // Since the general tier (2026-10-06) this is only reached when the user
+  // restricted the search to one document (documentKey) and it does not cover
+  // the question. An off-topic question asked that way lands here too, so the
+  // wording states the assistant's scope as well as the coverage gap.
   return (
     "I only answer questions about food, nutrition and food safety, from official public guidance. " +
     "The guidance I searched doesn't cover that. I looked in: " +
@@ -167,7 +224,12 @@ export async function POST(req: NextRequest) {
       data: { conversationId, role: "assistant", content: REFUSAL_MESSAGE },
     });
     return withOwnerCookie(
-      NextResponse.json({ conversationId, answer: REFUSAL_MESSAGE, claims: [] }),
+      NextResponse.json({
+        conversationId,
+        answer: REFUSAL_MESSAGE,
+        claims: [],
+        answerMode: "refused" satisfies AnswerMode,
+      }),
       owner
     );
   }
@@ -188,71 +250,112 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4. Sufficiency gate — refuse BEFORE the model is asked to write from thin
-  // material. Given weak passages a capable model writes a confident wrong
-  // answer, which is the quietest way grounding fails.
-  if (!retrieval.sufficient) {
-    const answer = notInCorpusMessage(retrieval.documentsSearched);
-    await logFailure("not_in_corpus", `${retrieval.reason} — query="${message.slice(0, 120)}"`);
-    await prisma.message.create({ data: { conversationId, role: "assistant", content: answer } });
-    return withOwnerCookie(
-      NextResponse.json({
-      conversationId,
-      answer,
-      claims: [],
-      retrieval: {
-        mode: documentKey ? "filtered" : "all",
-        sufficient: false,
-        reason: retrieval.reason,
-        k: retrieval.k,
-        documentsSearched: retrieval.documentsSearched,
-        chunks: [],
-        configVersion: RETRIEVAL_CONFIG_HASH,
-      },
-    }),
-      owner
-    );
-  }
-
-  // 5. Generate from the retrieved passages only.
   const history: ConversationTurn[] = [
     ...priorMessages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
     { role: "user", content: message },
   ];
 
+  // 4. Sufficiency gate. The model is never asked to write a GROUNDED answer
+  // from thin material: given weak passages a capable model writes a confident
+  // wrong answer behind real-looking citations, which is the quietest way
+  // grounding fails.
+  //
+  // What happens instead depends on the request:
+  //   - documentKey set: the user asked about ONE document, and it does not
+  //     cover this. Answering from general knowledge would misrepresent what
+  //     that document says, so the not-in-corpus reply stands.
+  //   - otherwise: the general-knowledge tier (added 2026-10-06) answers from
+  //     model knowledge, with NO claims and answerMode "general", so the client
+  //     labels it as not coming from the cited documents.
+  if (!retrieval.sufficient) {
+    await logFailure("not_in_corpus", `${retrieval.reason} — query="${message.slice(0, 120)}"`);
+    const retrievalBlock = {
+      mode: documentKey ? "filtered" : "all",
+      sufficient: false,
+      reason: retrieval.reason,
+      k: retrieval.k,
+      documentsSearched: retrieval.documentsSearched,
+      chunks: [],
+      configVersion: RETRIEVAL_CONFIG_HASH,
+    };
+
+    if (documentKey) {
+      const answer = notInCorpusMessage(retrieval.documentsSearched);
+      await prisma.message.create({ data: { conversationId, role: "assistant", content: answer } });
+      return withOwnerCookie(
+        NextResponse.json({
+          conversationId,
+          answer,
+          claims: [],
+          answerMode: "refused" satisfies AnswerMode,
+          retrieval: retrievalBlock,
+        }),
+        owner
+      );
+    }
+
+    // 4b. General tier. One extra Groq call, only on this path; the rate
+    // limiter and the generation deadline apply to it like any other call.
+    let general;
+    try {
+      general = await generateGeneralAnswer(history);
+    } catch (err) {
+      return generationFailure(err, conversationId, owner);
+    }
+
+    let generalAnswer = stripMarkers(general.answer);
+    if (!generalAnswer) {
+      await logFailure("invalid_schema", "Model returned a blank general answer");
+      const fallback = "Sorry, something went wrong generating a response. Please try again.";
+      await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
+      return withOwnerCookie(
+        NextResponse.json({ conversationId, answer: fallback, claims: [] }, { status: 422 }),
+        owner
+      );
+    }
+
+    let generalMode: AnswerMode = "general";
+    // Off-topic is refused, never answered and never labelled "general".
+    if (isOffTopicReply(generalAnswer)) {
+      generalAnswer = OFF_TOPIC_MESSAGE;
+      generalMode = "refused";
+    }
+
+    // Post-call scope guard: applies to general answers exactly as to grounded.
+    const generalCheck = checkResponse(generalAnswer);
+    if (!generalCheck.allowed) {
+      await logFailure(
+        "missed_refusal",
+        `Post-call guard caught category=${generalCheck.category} (general tier)`
+      );
+      generalAnswer = REFUSAL_MESSAGE;
+      generalMode = "refused";
+    }
+
+    await prisma.message.create({
+      data: { conversationId, role: "assistant", content: generalAnswer },
+    });
+    // claims is ALWAYS empty here: there are no retrieved passages a claim
+    // could be bound to, so any citation would be fabricated.
+    return withOwnerCookie(
+      NextResponse.json({
+        conversationId,
+        answer: generalAnswer,
+        claims: [],
+        answerMode: generalMode,
+        retrieval: retrievalBlock,
+      }),
+      owner
+    );
+  }
+
+  // 5. Generate from the retrieved passages only (grounded tier).
+
   let llm;
   try {
     llm = await generateGroundedAnswer(history, formatPassages(retrieval.chunks));
   } catch (err) {
-    // Two different failures used to share one label and one message. Running
-    // out of Groq capacity - the per-minute token budget is spent, so a queued
-    // request outlives the generation deadline, or the daily quota is gone - is
-    // not a malformed response, and telling the user "something went wrong" for
-    // it is untrue. It is now reported as capacity, with a 503 the client can
-    // retry, and logged under its own category so the failure log can tell a
-    // quota problem from a model problem.
-    const message = err instanceof Error ? err.message : String(err);
-    const name = err instanceof Error ? err.name : "";
-    const status = (err as { status?: number } | null)?.status;
-    const atCapacity =
-      name === "AbortError" ||
-      name === "TimeoutError" ||
-      status === 429 ||
-      // The local limiter's own refusals, e.g. "exceeds the per-minute budget".
-      /rate limit|per-minute budget/i.test(message);
-
-    await logFailure(atCapacity ? "capacity" : "invalid_schema", message);
-    const fallback = atCapacity
-      ? "The assistant is at capacity right now. Please try again in a minute."
-      : "Sorry, something went wrong generating a response. Please try again.";
-    await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
-    return withOwnerCookie(
-      NextResponse.json(
-        { conversationId, answer: fallback, claims: [] },
-        { status: atCapacity ? 503 : 422, headers: atCapacity ? { "Retry-After": "60" } : undefined }
-      ),
-      owner
-    );
+    return generationFailure(err, conversationId, owner);
   }
 
   // 6. Bind citations. A claim whose chunkId was not retrieved for THIS request
@@ -267,10 +370,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // The model sometimes copies tool-style citation markers ("【PASSAGE 1†L3】")
-  // into its text. Citations are built server-side from the database, so the
-  // markers are noise the user should never see.
-  const stripMarkers = (text: string) => text.replace(/[ 	]*【[^】]*】/g, "").trim();
   let answer = stripMarkers(llm.answer);
   // A claim that was nothing but a marker is dropped rather than shipped empty.
   let claims: Claim[] = boundClaims
@@ -289,6 +388,17 @@ export async function POST(req: NextRequest) {
     );
   }
   let suppressed = false;
+  let answerMode: AnswerMode = "grounded";
+
+  // The grounded prompt also tells the model to give the off-topic message, for
+  // an off-topic question that happens to retrieve well. It is a refusal.
+  if (isOffTopicReply(answer)) {
+    answer = OFF_TOPIC_MESSAGE;
+    claims = [];
+    answerMode = "refused";
+    // Nothing was answered, so no passages are shipped alongside the refusal.
+    suppressed = true;
+  }
 
   // 7. Post-call scope guard — independent of whether the pre-call check passed.
   const postCheck = checkResponse(answer);
@@ -301,6 +411,7 @@ export async function POST(req: NextRequest) {
     // content the guard just decided must not go out, to any client that reads
     // the retrieval block.
     suppressed = true;
+    answerMode = "refused";
   }
 
   // 8. Persist.
@@ -318,13 +429,15 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 9. Respond. The envelope is unchanged from Milestone 1; `retrieval` is added
-  // alongside, so a Milestone 1 client keeps working and simply ignores it.
+  // 9. Respond. The envelope is unchanged from Milestone 1; `retrieval` and
+  // `answerMode` are added alongside, so an older client keeps working and
+  // simply ignores them.
   return withOwnerCookie(
     NextResponse.json({
     conversationId,
     answer,
     claims,
+    answerMode,
     retrieval: {
       mode: documentKey ? "filtered" : "all",
       sufficient: true,
