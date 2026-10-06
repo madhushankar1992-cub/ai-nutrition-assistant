@@ -9,7 +9,7 @@ import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
 import { warmUp } from "@/lib/corpus/embeddings";
-import { getCachedAnswer, setCachedAnswer, PROMPT_VERSION, withFirstQuestionLock } from "@/lib/answerCache";
+import { getCachedAnswer, setCachedAnswer, PROMPT_VERSION, withFirstQuestionLock, normaliseQuestion } from "@/lib/answerCache";
 import { answeredHistory } from "@/lib/chatHistory";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
 import { getSource } from "@/lib/corpus/sources";
@@ -242,7 +242,7 @@ async function handlePost(req: NextRequest) {
   // `x-cache-bypass: 1` forces a fresh answer and skips storing it. The
   // evaluation sends it: it asks each question three times to measure the
   // model's consistency, and cache hits would make that check meaningless.
-  const completedHistory = answeredHistory(priorMessages);
+  const completedHistory = answeredHistory(priorMessages, message, normaliseQuestion);
   const firstTurn = completedHistory.length === 0 && req.headers.get("x-cache-bypass") !== "1";
 
   // 2. Scope guard — FIRST, before embedding, retrieval or any model call.

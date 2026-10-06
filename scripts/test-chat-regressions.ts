@@ -264,6 +264,32 @@ async function main() {
       assert.equal(lastGeneralHistory[2].content, question);
       assert.ok(!lastGeneralHistory.some((turn) => turn.content.includes("at capacity")));
     });
+    await test("different failed questions preserve dietary preferences and allergy context instead of sharing a first-question answer", async () => {
+      const question = "What ingredients can replace eggs when baking bread?";
+      await setCachedAnswer(question, null, {
+        answer: "A shared answer without personal context.", claims: [], answerMode: "general", retrieval: {},
+      });
+      for (const context of [
+        "I eat only plant-based foods. What are some lunch ideas?",
+        "I have a peanut allergy. What ingredients can replace peanuts in a snack?",
+      ]) {
+        generationError = Object.assign(new Error("offline capacity"), { status: 429 });
+        let failed: Awaited<ReturnType<typeof post>>;
+        try { failed = await post({ message: context }); }
+        finally { generationError = null; }
+        assert.equal(failed!.response.status, 503);
+        const cookie = failed!.response.headers.get("set-cookie")!.split(";")[0];
+        const before = generalCalls;
+        const next = await post({ message: question, conversationId: failed!.body.conversationId }, { cookie });
+        assert.equal(next.response.status, 200);
+        assert.equal(next.body.cached, undefined, "retained food context must keep the conversation outside the shared cache");
+        assert.equal(generalCalls, before + 1);
+        assert.equal(lastGeneralHistory.length, 2);
+        assert.equal(lastGeneralHistory[0].content, context, "failed user context must still be visible to generation");
+        assert.equal(lastGeneralHistory[1].content, question);
+        assert.ok(!lastGeneralHistory.some((turn) => turn.content.includes("at capacity")));
+      }
+    });
     await test("concurrent identical first questions generate once and preserve separate owners", async () => {
       const question = "How should fresh okra be refrigerated?";
       let release!: () => void;
