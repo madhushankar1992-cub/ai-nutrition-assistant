@@ -34,6 +34,10 @@ npm run eval:retrieval        # tsx scripts/evaluate-retrieval.ts — the Milest
                               # directly (no server needed) over data/retrieval-questions.json, reporting
                               # recall@k, document_recall@k, false refusals and an 8-case adversarial suite,
                               # then writes Docs/retrieval-report.md. Exits non-zero if adversarial < 100%.
+
+npm run test:corpus           # tsx scripts/test-corpus-watch.ts — offline watcher regression checks; HTTP and
+                              # persistence are stubbed, so no database or network is contacted.
+npm run test:rate             # tsx scripts/test-rate-limiter.ts — the Groq-facing rate limiter.
 ```
 
 Corpus commands (these need `GROQ_API_KEY`, which lives in `.env.local`, not `.env` — hence the two
@@ -52,7 +56,9 @@ docker compose up --build                          # app on http://localhost:300
 docker compose --profile ingest run --rm ingest    # first run only: load the corpus into the empty local db
 ```
 
-Verified end to end on 2026-10-04 (Docker Desktop 4.93 on WSL 2): all 5 migrations apply to an empty database, the ingest service loads 7 documents / 226 chunks / 226 embedded with 0 warnings, the app answers with citations, and the production database was byte-for-byte unchanged before and after. `docker-compose.yml` reads `.env.local` only for the Groq key. `.env.local` holds the **production** `DATABASE_URL`, so every service overrides `DATABASE_URL` (and blanks `BACKEND_API_URL`) in its `environment` block, which always wins over `env_file`. Never remove those overrides, or a local run writes to production. `.dockerignore` keeps every `.env*` file out of the image.
+Verified end to end on 2026-10-04 (Docker Desktop 4.93 on WSL 2): all 5 migrations apply to an empty database, the ingest service loads 7 documents / 226 chunks / 226 embedded with 0 warnings, the app answers with citations, and the production database was byte-for-byte unchanged before and after. `docker-compose.yml` reads `.env.local` only for the Groq key. `.env.local` holds the **production** `DATABASE_URL`, so every service overrides `DATABASE_URL` (and blanks `BACKEND_API_URL`) in its `environment` block, which always wins over `env_file`. Never remove those overrides, or a local run writes to production. `.dockerignore` keeps every `.env*` file out of the image. The image file is `Dockerfile.dev`: never add a root-level `Dockerfile`, because Railway auto-builds it instead of Railpack.
+
+**Secrets.** The repository is public. The Groq key lives only in the gitignored `.env.local`, never in `.env.local.example` (a key was once pasted there). GitHub secret scanning and push protection are on, and a local `.git/hooks/pre-commit` blocks any staged `gsk_` key or password-bearing `postgres://` URL. Check `git diff --cached` before committing anyway.
 
 `DATABASE_URL` must point at a real Postgres instance even for local dev — `prisma/schema.prisma`'s datasource is `postgresql`, not SQLite (a leftover `prisma/dev.db` from earlier SQLite-based development exists but is not what the current schema uses). It must also have the **pgvector** extension available.
 
@@ -109,4 +115,4 @@ Three things in that chain are easy to get wrong and are load-bearing:
 
 **System prompt** (`lib/systemPrompt.ts`): exports `SYSTEM_PROMPT_RAG` (grounded tier) and `SYSTEM_PROMPT_GENERAL` (general-knowledge tier, added 2026-10-06; same `TOPIC_RESTRICTION`, `OUT_OF_SCOPE` and population framing, no citations, no calorie figures, no named documents). The Milestone 1 ungrounded `SYSTEM_PROMPT`, `generateStructuredAnswer` and `M1ResponseSchema` had no runtime caller and were removed on 2026-10-04. Both are built from shared sections defining the assistant's persona ("Sage"), answer style (concise, ~150 words, no padding/hedging, answer only what was asked — added specifically so repeated identical questions get comparable answers across the 3x eval runs), the claims-decomposition instruction, a `TOPIC_RESTRICTION` limiting answers to food and nutrition, and the same out-of-scope categories as the code-level `scopeGuard` (defense in depth — the prompt is not relied on alone).
 
-See `Docs/embedding-strategy.md` for the embedding contract — model, 384 dimensions, int8 precision, and the bge query/passage asymmetry (a query takes the instruction prefix, a passage does not; getting it backwards is silent quality loss, not an error), plus what forces a full re-embed. See `Docs/chunking-strategy.md` for what gets embedded and `Docs/vector-store.md` for where the vectors live. See `Docs/rag-architecture.md` for the full as-built design (this supersedes the original pre-build plan where the two diverge) and `Docs/deployment-plan.md` for deployment specifics.
+See `Docs/embedding-strategy.md` for the embedding contract — model, 384 dimensions, int8 precision, and the bge query/passage asymmetry (a query takes the instruction prefix, a passage does not; getting it backwards is silent quality loss, not an error), plus what forces a full re-embed. See `Docs/chunking-strategy.md` for what gets embedded and `Docs/vector-store.md` for where the vectors live. See `Docs/rag-architecture.md` for the full as-built design (this supersedes the original pre-build plan where the two diverge) and `Docs/deployment-plan.md` for deployment specifics (`Docs/deployment-plan-v2.md` §0 records the current deployment state).

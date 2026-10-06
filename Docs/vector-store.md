@@ -103,14 +103,16 @@ SELECT c.*, d.name, d.publisher, d.year, d.url,
        1 - (c.embedding <=> $1::vector) AS score
 FROM "Chunk" c JOIN "Document" d ON d.id = c."documentId"
 WHERE d."sourceKey" = $2 AND c.embedding IS NOT NULL
+  AND c.kind NOT IN ('references', 'toc')      -- bibliographies / contents pages
 ORDER BY c.embedding <=> $1::vector
 LIMIT $3;
 ```
 
-Three properties that matter:
+Four properties that matter:
 
 - **The query vector is a bound parameter, never interpolated.** It derives from user text, and interpolating it would reintroduce injection at the one layer the ORM does not cover.
 - **The document filter is in `WHERE`, not applied afterwards.** Post-filtering an all-documents result returns fewer than `k` rows — often zero — exactly when the named document is not already in the global top-`k`, which is the case single-document retrieval exists to serve.
+- **Non-answering kinds are excluded in `WHERE` too**, so bibliographies and contents pages never take candidate slots (`EXCLUDE_NON_ANSWERING`).
 - **Vectors are normalised** (bge with `normalize: true`), so cosine distance converts to similarity as `1 - distance`.
 
 ---
@@ -127,7 +129,10 @@ The scheduler runs daily, so ingestion must be idempotent rather than additive.
 
 ## 6. Measured state
 
-From the real run on 2026-10-02:
+**Current (as of 2026-10-06):** 7 documents · 226 chunks · 226 embedded · `configHash` `b63742d51a`,
+maintained by the daily scheduled ingest.
+
+Historical, from the real run on 2026-10-02:
 
 ```
 229 chunks total · 12 table · 9 restricted
@@ -144,4 +149,10 @@ Verified retrieval, all-documents mode:
 
 Single-document filtering returns only chunks from the named document, as intended.
 
-> **An open quality issue, recorded rather than hidden.** For the leftovers query the top hit is an FSA passage about *changing the fridge power setting*, not the 48-hour rule — the correct chunk exists but ranks lower. This is a **retrieval** failure, not a generation one, and it is exactly what the 15-question bank is built to quantify (`recall@k`). Fix candidates: raise `k`, lower the chunk target so one chunk carries one rule, or add a re-ranking pass. Do not tune this by eye — measure it first.
+What happens after `queryChunks` returns — over-fetch and re-rank, then the sufficiency gate that
+decides between a grounded, cited answer and a labelled general-knowledge answer with no claims —
+is in `lib/retrieval.ts` and `Docs/rag-architecture.md`.
+
+> **An open quality issue, recorded rather than hidden** (since closed — see below). For the leftovers query the top hit is an FSA passage about *changing the fridge power setting*, not the 48-hour rule — the correct chunk exists but ranks lower. This is a **retrieval** failure, not a generation one, and it is exactly what the 15-question bank is built to quantify (`recall@k`). Fix candidates: raise `k`, lower the chunk target so one chunk carries one rule, or add a re-ranking pass. Do not tune this by eye — measure it first.
+>
+> **Closed (as of 2026-10-06):** the cause was chunk size, not ranking — HTML's 500-token chunks contained every query term. `HTML_CHUNK_TARGET_TOKENS = 220` plus density-based lexical re-ranking put the 48-hour chunk at rank 1 (`Docs/chunking-strategy.md` §10, item 5). The question bank now measures `recall@5` 17/17.

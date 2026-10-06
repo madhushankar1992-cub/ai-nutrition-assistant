@@ -1,5 +1,7 @@
 # Evaluation Specification — AI Nutrition Assistant (Milestone 1)
 
+> **Status as of 2026-10-06:** This is the Milestone 1 evaluation spec, kept as a record. `npm run eval` still exists and now exercises the live Milestone 2 route; its `promptVersion` is `sha256(SYSTEM_PROMPT_RAG).slice(0,10)`. Since 2026-10-06 that route answers in two tiers — grounded and cited when retrieval is sufficient, otherwise a labelled, uncited general-knowledge answer (`answerMode: "general"`) — so an answer without citations is not by itself a failure. Retrieval is measured separately by `npm run eval:retrieval`, which writes [retrieval-report.md](retrieval-report.md) (2026-10-04: recall@5 17/17, adversarial 8/8, 0 false refusals). See `CLAUDE.md` and [rag-architecture.md](rag-architecture.md) §15.2.
+
 Expands rag-architecture.md §30 (Evaluation) into a full spec: what gets measured, how, why each failure category exists, and how results feed back into prompt iteration. Ties together problemStatement.md §6–7, rag-architecture.md §21 & §30, and the gaps noted in [edge-cases.md](edge-cases.md).
 
 ---

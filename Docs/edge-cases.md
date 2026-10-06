@@ -1,5 +1,7 @@
 # Edge Cases and Corner Scenarios
 
+> **Status as of 2026-10-06:** this is the Milestone 1 design-time list, kept as written. The living, testable catalogue is [edge-cases-catalogue.md](edge-cases-catalogue.md). Several **GAP**s below are closed: conversation ownership via a signed cookie (a non-owner gets 404), off-topic questions refused in both answer tiers, a 4,000-character message cap (client and server), an unknown `documentKey` rejected with 400, and `GET /api/chat` as the health check. Milestone 2 (cited retrieval) and the labelled general-knowledge tier are live, so the `source: null` rows describe M1 only.
+
 Companion to [implementation-plan.md](implementation-plan.md). Organized by the same phases so each edge case can be handled (or explicitly deferred) at the point it's introduced. "Mitigation" describes the design response; where the current scaffold doesn't yet handle something, it's marked **GAP**.
 
 ---

@@ -1,5 +1,7 @@
 # Completion review — 2026-10-03
 
+> **Status as of 2026-10-06:** the review below is a dated record. Three of its points have changed since. "Every answer is grounded" no longer holds: a labelled general-knowledge tier now answers food questions the corpus does not cover, with no citations (`answerMode: "general"`). The protein question is answered and cited since the 2026-10-05 prompt fix. `docker compose up` was verified end to end on 2026-10-04.
+
 Reviewed the saved frontend, retrieval, watcher and evaluation changes with a second agent.
 
 ## Fixes

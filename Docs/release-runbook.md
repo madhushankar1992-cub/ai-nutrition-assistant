@@ -59,7 +59,9 @@ A single grounded answer needs about 2,900 tokens in one request.
 - Frontend `https://ai-nutrition-assistant-self.vercel.app` (GET root 200; GET /api/chat ok).
 - POST a salt question on each host: a cited answer, with WHO and PHE both attributed.
 - POST a calorie question: refused, no claims.
-- POST an off-corpus question: refused, names the 7 documents.
+- POST an off-corpus food question (e.g. "What is jollof rice?"): since 2026-10-06 a labelled general-knowledge
+  answer, `answerMode: "general"`, no claims. With a `documentKey` filter it is still refused, naming that document.
+- POST an off-topic question (e.g. "Who won the 2018 World Cup?"): refused, `answerMode: "refused"`.
 - Stranger on an owned conversation: 404.
 
 ## 7. Report

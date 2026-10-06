@@ -1,5 +1,7 @@
 # Deployment & Categorization Test Log
 
+> **Status as of 2026-10-06:** a Milestone 1 test record (`source: null` is correct for that date). Answers are now cited or labelled general knowledge, and the system prompt has grown, so the token figures in §2 are out of date (a grounded answer is now about 2,900 tokens or more).
+
 Run date: 2026-10-01. Companion spreadsheet: [deployment-test-log.xlsx](deployment-test-log.xlsx).
 
 **Live URLs:**

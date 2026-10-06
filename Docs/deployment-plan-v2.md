@@ -6,6 +6,26 @@ This supersedes the Milestone 1 Vercel+Railway setup described in [deployment-pl
 
 ---
 
+## 0. Current deployment state (2026-10-06)
+
+The backend went to **Railway, not Render**. Everything else in the target topology below held: a long-running container for `/api/chat`, the UI on Vercel, the scheduler on GitHub Actions, one Postgres + pgvector database. Read "Render" in §§1–9 as "the backend container host"; the reasoning is unchanged.
+
+| Component | Where | State |
+|---|---|---|
+| Frontend | Vercel — https://ai-nutrition-assistant-self.vercel.app | Serves the UI. `BACKEND_API_URL` is set, so `/api/chat` is **forwarded by the route handler** to Railway (a `next.config.js` rewrite was tried first and did nothing: filesystem routes win over rewrites). Deployed manually with `npx vercel deploy --prod --yes --scope mad-6a83`; the GitHub connection was never linked, so a push does not update Vercel |
+| Backend | Railway — https://app-production-3fe4f.up.railway.app/api/chat | Runs retrieval (bge-small, int8, loaded once in the container) and both Groq tiers. Built with Railpack. Auto-deploys on push; `npx --yes @railway/cli@latest up --ci --service app` builds from current source |
+| Database | Railway Postgres + pgvector | Shared by both hosts and the scheduler. 7 documents · 226 chunks · 226 embedded · config `b63742d51a` · HNSW cosine index on `vector(384)` |
+| Scheduler | GitHub Actions `corpus-ingest.yml`, 09:15 IST daily | Recent runs succeed. The 6 Oct 09:15 IST run failed on a transient who.int glitch; a manual re-run succeeded and issue #1 is closed |
+| Source | https://github.com/madhushankar1992-cub/ai-nutrition-assistant | Public. Secret scanning and push protection on; a local pre-commit hook also blocks Groq keys |
+
+**Answering (since 2026-10-06):** grounded and cited when the 7 documents cover the question; otherwise a labelled general-knowledge answer with no citations; personal targets, medical advice and off-topic requests refused. Every response carries `answerMode: grounded | general | refused`.
+
+**Health check:** `GET /api/chat` on either host should return status ok, 7 documents, 226 chunks, 226 embedded, and `groqConfigured: true`. On Vercel the GET is forwarded too, so it reports the container's view.
+
+**Why not Render, and why not all-Vercel.** Railway already held the database and the Milestone 1 deployment, so it took the container role. All-Vercel was tried and measured: even with int8 weights (~33 MB) and a writable cache directory, serverless retrieval returned 503 on every request. The fix if the proxy is ever unacceptable is a hosted embedding API, which means a new provider and credential. See `CLAUDE.md` and [deployment-plan.md](deployment-plan.md) §9.
+
+---
+
 ## 1. Topology
 
 ```
@@ -63,7 +83,9 @@ This is a single Next.js app, so the "frontend" and "backend" are the same repos
 | `DATABASE_URL` | ✅ | ✅ | ✅ (secret) | Same instance everywhere. **The only secret the scheduler needs** |
 | `GROQ_API_KEY` | — | ✅ | — | Backend only. Never `NEXT_PUBLIC_` |
 | `GROQ_MODEL` | — | ✅ | — | Defaults to `openai/gpt-oss-120b` |
-| `NEXT_PUBLIC_API_BASE_URL` | ✅ | — | — | Render's URL, only if the UI is split off |
+| `NEXT_PUBLIC_API_BASE_URL` | ✅ | — | — | Render's URL, only if the UI is split off. *(Not used as built: the browser always calls same-origin `/api/chat`, so there is no CORS.)* |
+| `BACKEND_API_URL` | ✅ | — (must be blank) | — | **As built.** The Railway backend URL. When set, the route handler forwards every `/api/chat` request there, passing `cookie` through and returning `set-cookie` |
+| `SESSION_SECRET` | — | ✅ | — | **As built.** Signs the `nk_owner` conversation-ownership cookie; falls back to `DATABASE_URL` if unset |
 
 No embedding credential and no vector-store credential: bge-small runs locally and vectors live in the same Postgres.
 
@@ -109,10 +131,11 @@ After deploying, confirm each — do not infer any of them from a successful bui
 
 - [ ] Frontend loads and renders the chat UI
 - [ ] `POST /api/chat` with an in-scope question returns an answer with claims
+- [ ] A food question the corpus does not cover ("what is jollof rice?") returns `answerMode: "general"`, no claims, and the UI badge
 - [ ] An off-topic question ("who won the World Cup") is refused
 - [ ] A calorie-target request is refused with a professional referral
 - [ ] Two browser tabs hold independent conversations
-- [ ] `SELECT COUNT(*) FROM "Chunk" WHERE embedding IS NOT NULL` returns the expected count (currently **232**)
+- [ ] `SELECT COUNT(*) FROM "Chunk" WHERE embedding IS NOT NULL` returns the expected count (currently **226**; 232 when this plan was written)
 - [ ] `workflow_dispatch` on the ingest workflow completes green
 - [ ] A deliberately broken `expectYearIn` makes ingest **abort** rather than ingest the wrong edition
 
@@ -122,7 +145,7 @@ After deploying, confirm each — do not infer any of them from a successful bui
 
 | Failure | Action |
 |---|---|
-| Bad backend deploy | Render → Rollback to the previous deploy |
+| Bad backend deploy | Render → Rollback to the previous deploy (as built: Railway → redeploy the previous deployment) |
 | Bad frontend deploy | Vercel → Promote the previous deployment |
 | Bad ingest (wrong chunks) | Change the chunk config, re-run ingest. Stale `configHash` rows are deleted automatically |
 | Corpus poisoned by a bad document | Set `enabled: false` in `lib/corpus/sources.ts`, re-run ingest |
@@ -137,7 +160,7 @@ After deploying, confirm each — do not infer any of them from a successful bui
 |---|---|---|
 | Vercel | Hobby | Free |
 | Render | Starter | Free tier sleeps on idle — first request after sleep is slow. Paid avoids this |
-| Postgres | Railway / Render | Watch the storage limit; 229 chunks × 384 floats is small |
+| Postgres | Railway / Render | Watch the storage limit; 226 chunks × 384 floats is small |
 | GitHub Actions | Free | ~3 min/day |
 | Groq | Free tier | **The real constraint:** 8,000 tokens/min. RAG context makes each request ~4,200–5,200 tokens, so roughly 1–1.5 requests/minute |
 

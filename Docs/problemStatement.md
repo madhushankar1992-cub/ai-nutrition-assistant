@@ -1,5 +1,7 @@
 # AI Nutrition Assistant
 
+> **Status as of 2026-10-06:** Milestones 1 and 2 are built and deployed. This file is the original requirements brief plus the 2026-10-02 source research, kept as written; dated notes mark where the build moved on. As built, the corpus is 7 documents / 226 chunks (all embedded), the two US food-safety charts were removed on 2026-10-03, and a labelled, uncited general-knowledge tier answers food questions the corpus does not cover. `CLAUDE.md`, `README.md` and `Docs/rag-architecture.md` describe the current system.
+
 You are tasked with building an AI-powered chatbot that answers questions about food, nutrition and food safety using a Large Language Model (LLM). The project is built in milestones. Milestone 1 uses the model's own knowledge with no retrieval layer, deliberately, so that unsupported claims and inconsistent answers are exposed and recorded rather than hidden. Milestone 2 puts a retrieval layer underneath it so every claim traces back to a published guidance document. Milestone 3 adds structured per-food nutrient data.
 
 Each milestone keeps the interface, endpoints and response shape of the one before it. The work is additive: later milestones fill in fields and layers that earlier milestones deliberately left empty.
@@ -189,7 +191,7 @@ URL status and title metadata are not enough to plan a corpus. Every downloadabl
 | **safefood (Ireland)** | 14 | **6,085** | 434 | Clean | Numbered sections: 1.1 Background, 1.2 Terms of reference, 1.3 Scope, 2.1 Transport and storage |
 | **FSANZ** | 23 | **6,930** | 301 | Clean | Guidance on Standard 3.2.2 temperature-control requirements |
 
-**Corpus-size consequence.** The recommended seven total roughly **95,000–135,000 words**, which at a 500-token chunk target is on the order of **300–400 chunks**. That is small. It confirms two decisions: exact vector search is correct (no approximate index needed), and the corpus will frequently *not* cover a question — which makes the not-in-corpus refusal a mainline path, not an edge case.
+**Corpus-size consequence.** The recommended seven total roughly **95,000–135,000 words**, which at a 500-token chunk target is on the order of **300–400 chunks** *(as built, 2026-10-06: 226 chunks from 7 documents)*. That is small. It confirms two decisions: exact vector search is correct (no approximate index needed), and the corpus will frequently *not* cover a question — which makes the not-in-corpus refusal a mainline path, not an edge case.
 
 **Volume is wildly uneven.** EFSA alone (48,717 words) is roughly **18× the entire current US dietary guidance** (2,704 words). Under a single global `k`, the US document can be crowded out of every result despite being current official guidance. This is the strongest argument for reporting recall per document.
 
@@ -276,7 +278,7 @@ Of the 13 candidates, these 7 are the defensible minimum: every one was fetched 
 | 6 | How to chill, freeze and defrost food safely | Food Standards Agency (UK) | 2017 | Domestic chilling, freezing and defrosting rules — directly answers the storage questions, and supplies the disagreement partner described below |
 | 7 | Guideline: Sodium intake for adults and children | WHO | 2012 | A single-nutrient guideline, which exercises single-document filtered retrieval, and disagrees in *units* with #3 and #4 |
 
-Three publishers (WHO, EFSA, PHE/FSA, USDA-HHS) and two document classes (dietary guidance and food safety) are represented, which is what makes the cross-document and single-document-filter requirements testable. Candidates 10, 12 and 13 are reasonable substitutes if one of the above has to be dropped; candidates 5 and 6 of the main table are the ones to add if manual download is acceptable.
+Three publishers (WHO, EFSA, PHE/FSA, USDA-HHS) and two document classes (dietary guidance and food safety) are represented, which is what makes the cross-document and single-document-filter requirements testable. Candidates 10, 12 and 13 are reasonable substitutes if one of the above has to be dropped; candidates 5 and 6 of the main table are the ones to add if manual download is acceptable. *(Removed 2026-10-03: the two US food-safety charts are no longer candidates — see the note above.)*
 
 **Two traps this check uncovered — both are exactly the failure mode this milestone targets:**
 
@@ -317,7 +319,7 @@ Re-run this check at ingestion and record the result as each document's retrieva
 
 ##### What This Candidate List Implies for the Tests
 
-- **The cross-document overlap is already present and real.** FoodSafety.gov (#5) and the UK FSA (#9) both cover storing cooked leftovers, and they do not agree.
+- **The cross-document overlap is already present and real.** FoodSafety.gov (#5) and the UK FSA (#9) both cover storing cooked leftovers, and they do not agree. *(Superseded 2026-10-03: FoodSafety.gov was removed from the registry, so this overlap is not in the corpus; the as-built cross-document test is salt — WHO, PHE and the US guidelines.)*
 
   | Publisher | Leftovers kept for | Cooling after cooking | Fridge temperature |
   |---|---|---|---|

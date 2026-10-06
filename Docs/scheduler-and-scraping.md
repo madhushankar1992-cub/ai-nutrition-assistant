@@ -26,6 +26,22 @@ GitHub delays scheduled runs when the platform is busy, so treat this as "shortl
 
 `workflow_dispatch` is also enabled, with two inputs: `dry_run` (everything except the upload) and `source` (one document key).
 
+### Current state (as of 2026-10-06)
+
+Running daily at 09:15 IST (03:45 UTC). The 6 Oct 09:15 IST scheduled run failed on a transient
+who.int glitch; a manual re-run succeeded the same day and issue #1 ("Corpus ingest needs review"),
+which the failed scheduled run opened, is closed. The 4 and 5 Oct scheduled runs and both 6 Oct
+manual runs succeeded. The corpus is 7 documents · 226 chunks · 226 embedded, retrieval config
+`b63742d51a`.
+
+| Run | Trigger | Started (UTC) | Result |
+|---|---|---|---|
+| 37497583232 | manual | 2026-10-06 16:40 | success, 1m39s |
+| 37497164192 | manual | 2026-10-06 16:37 | success, 2m4s |
+| 37411401740 | schedule | 2026-10-06 03:57 | failure, 1m52s — transient who.int glitch |
+| 37261724310 | schedule | 2026-10-05 04:01 | success, 2m26s |
+| 37180279596 | schedule | 2026-10-04 05:34 | success, 2m10s |
+
 ---
 
 ## 2. Pipeline order
@@ -153,7 +169,7 @@ Set these as **GitHub repository secrets** (Settings → Secrets and variables �
 
 No embedding credential is needed — bge-small runs locally. No vector-store credential is needed either — vectors go to the same Postgres. See [vector-store.md](vector-store.md).
 
-The workflow caches the ~130 MB ONNX weights with `actions/cache`, so only the first run downloads them.
+The workflow caches the bge ONNX weights (int8, ~33 MB; the fp32 build was ~127 MB) with `actions/cache`, so only the first run downloads them.
 
 ---
 
@@ -174,6 +190,8 @@ From a real run on 2026-10-02 (`npm run ingest -- --dry-run`):
 | USDA FSIS temperatures | — | — | skipped (403) |
 
 **232 chunks total · 12 table chunks · 9 restricted chunks.**
+
+> **Since then (as of 2026-10-06):** the two US food-safety charts that 403'd were removed from the registry on 2026-10-03 — they never produced a chunk and were the only warnings in every run — so the registry is exactly **7 sources, all of which ingest**. HTML chrome stripping and later the WHO publication-page cleanup (2026-10-04) changed the per-document counts; the corpus went 232 → 229 → **226 chunks**. Current per-document figures are in `Docs/chunking-strategy.md` §5.
 
 ### Three bugs this run caught
 

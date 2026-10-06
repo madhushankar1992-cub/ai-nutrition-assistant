@@ -7,6 +7,20 @@ Phased build order derived from [problemStatement.md](problemStatement.md) and [
 | **A** | Milestone 1 — prototype without retrieval | 0–11 | ✅ **Complete and deployed** |
 | **B** | Milestone 2 — dietary guidance RAG | 12–22 | ✅ **Complete and deployed** (4 Oct 2026). Railway serves retrieval; Vercel serves the UI and forwards `/api/chat` to Railway. Where Part B below differs from what shipped, [rag-architecture.md](rag-architecture.md) and `CLAUDE.md` describe the as-built system. |
 
+## As built (2026-10-06)
+
+The phases below are kept as the plan they were; this section records where the shipped system stands. `CLAUDE.md` and [rag-architecture.md](rag-architecture.md) are authoritative where they differ.
+
+- **Milestones.** Milestone 1 and Milestone 2 (RAG with server-bound citations) are both built and deployed: Vercel (https://ai-nutrition-assistant-self.vercel.app) serves the UI and forwards `/api/chat` via `BACKEND_API_URL` to Railway (https://app-production-3fe4f.up.railway.app/api/chat), which does retrieval. Both share one Railway Postgres. The Milestone 1 ungrounded prompt and path were removed on 2026-10-04.
+- **Corpus.** Registry (`lib/corpus/sources.ts`, not a `corpus/manifest.json`) holds exactly 7 sources, all of which ingest: 7 documents, **226 chunks, 226 embedded**, config hash `b63742d51a`, chunking 500/900/80. (History: 232 → 229 → 226 on 2026-10-04, after WHO publication-page chrome was stripped at extraction.) The two US food-safety charts were removed on 2026-10-03.
+- **Embeddings.** `Xenova/bge-small-en-v1.5`, 384 dimensions, int8, computed locally; stored in Postgres pgvector `vector(384)` with an HNSW cosine index. Not OpenAI, not `vector(1536)`; Chroma was used earlier and is gone.
+- **Scheduler.** `.github/workflows/corpus-ingest.yml`, cron `45 3 * * *` (09:15 IST daily). Recent runs succeed.
+- **Two-tier answering (added 2026-10-06).** When the sufficiency gate passes, the answer is grounded and cited (`answerMode: "grounded"`). When it fails and no `documentKey` is set, a second Groq call (`generateGeneralAnswer`, `SYSTEM_PROMPT_GENERAL`) answers from model knowledge with `claims` always `[]`, labelled in the UI "General knowledge — not from the cited official documents" (`answerMode: "general"`). Scope-guard, off-topic and post-call refusals are `answerMode: "refused"`; the not-in-corpus refusal now happens only in filtered mode (`documentKey`). The gap is still logged as `not_in_corpus`. See [rag-architecture.md §15.2](rag-architecture.md).
+- **Docker (local only).** `Dockerfile.dev` + `docker-compose.yml` + `.dockerignore`, verified end to end on 2026-10-04 (5 migrations, 7 documents / 226 chunks, 0 warnings, production database untouched). Never add a root `Dockerfile`: Railway builds any root Dockerfile instead of Railpack. Production does not use Docker.
+- **Security.** GitHub secret scanning and push protection are on; a local pre-commit hook blocks `gsk_` keys; the Groq key lives only in the gitignored `.env.local`; conversations are owned via the signed httpOnly `nk_owner` cookie (mismatch → 404); messages are capped at 4,000 characters on client and server (`lib/limits.ts`); an unknown or disabled `documentKey` → 400.
+- **Measured.** [retrieval-report.md](retrieval-report.md) (2026-10-04): recall@5 17/17, document_recall 17/17, adversarial 8/8, 0 false refusals.
+- **Commands.** `npm start` is `next start -H 0.0.0.0` (Next reads `PORT`; the old `-p ${PORT:-3000}` broke on Windows). Tests: `npm run test:scope`, `test:corpus`, `test:rate`, `eval:retrieval`, and `eval` (the M1-era live eval).
+
 ---
 ---
 
@@ -74,7 +88,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 **Exit criteria**
 
-- `corpus/manifest.json` lists 5–7 documents; every `sourceFile` exists in `corpus/raw/` and is committed.
+- `corpus/manifest.json` lists 5–7 documents; every `sourceFile` exists in `corpus/raw/` and is committed. *(As built: the registry is `lib/corpus/sources.ts`, 7 sources, each fetched from its public URL — no committed raw files.)*
 - Every `year` was read from inside the document, not from the page that linked it.
 - The corpus boundary and the overlap topic are written down.
 
@@ -118,13 +132,13 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 4. **Extract** — PDF → pages, headings, text.
 5. **Quality gate** — **per page, not per document.** Drop pages below a words-per-page threshold; keep the document.
 6. **Chunk** — heading-aware, 500-token target, 900 hard cap, 80-token overlap, never split a detected table.
-7. **Policy scan** — set `Chunk.restricted = true` on passages carrying calorie or per-kg-body-weight targets.
+7. **Policy scan** — set `Chunk.restricted = true` on passages carrying calorie or per-kg-body-weight targets. *(As built: the column was dropped by migration `20261003160000_drop_chunk_restricted`; the scope guard and prompt enforce the policy instead.)*
 8. **Embed** — batch to the embedding provider.
 9. **Upsert** — `Document` + `Chunk`, keyed by `(name, year, edition)` and `configHash`.
 
 **Exit criteria**
 
-- Full ingest produces roughly **300–400 chunks** across the corpus.
+- Full ingest produces roughly **300–400 chunks** across the corpus. *(As of 2026-10-06: 226 chunks, all embedded, from 7 documents.)*
 - Every chunk has a non-null `section`, a `documentId`, a `tokenCount` and an embedding.
 - Re-running with an unchanged manifest changes nothing (idempotent).
 - A deliberately corrupted `expectYearIn` **aborts the run** — test this explicitly.
@@ -154,7 +168,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 **Tasks**
 
-- `lib/embeddings.ts`: provider wrapper, batch (ingestion) and single (query), with query caching by normalised hash.
+- `lib/embeddings.ts`: provider wrapper, batch (ingestion) and single (query), with query caching by normalised hash. *(As built: `lib/corpus/embeddings.ts`, local bge-small, no external provider.)*
 - `lib/retrieval.ts`: `search({ queryVector, k, documentId? })`.
 - **All-documents mode** — cosine similarity across `Chunk`, top `k`.
 - **Filtered mode** — the `documentId` filter goes in the **SQL `WHERE` clause**, never as a post-filter on an all-documents result.
@@ -175,7 +189,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 > **Embedding strategy.** The floors are calibrated against scores from *this* model at *this* precision. Changing either invalidates the calibration, which is why `embeddingDtype` is part of `RETRIEVAL_CONFIG` and therefore of `configHash`.
 
-**Goal:** `lib/sufficiency.ts` — the mechanism behind the not-in-corpus refusal.
+**Goal:** `lib/sufficiency.ts` — the mechanism behind the not-in-corpus refusal. *(As built: `assessSufficiency` lives in `lib/retrieval.ts`. Since 2026-10-06 a failed gate routes to the labelled general-knowledge tier unless a `documentKey` is set — see As built above.)*
 
 **Tasks**
 
@@ -228,7 +242,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 - **Remove the M1 `source = null` clamp**, now that `bindCitations` replaces it.
 - Add the `NOT_IN_CORPUS` refusal, populating `retrieval.documentsSearched` so the answer can name what it searched.
 - ~~Persist a `RetrievalRecord` per assistant message.~~ *Not built.* What was searched is returned in each response's `retrieval` block, and every persisted `Claim` stores its `chunkId`.
-- Add `documentId` to `ChatRequestSchema`, validated as a UUID and resolved against `Document`.
+- Add `documentId` to `ChatRequestSchema`, validated as a UUID and resolved against `Document`. *(As built: `documentKey`, a registry key; an unknown or disabled key returns 400.)*
 - `DELETE` removes `Claim` → `Message` → `Conversation`, and **not** `Document` or `Chunk`. (No `RetrievalRecord` rows exist to remove.)
 
 **Exit criteria**
@@ -236,7 +250,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 - A normal question returns claims with populated citations; every cited `chunkId` appears in that request's retrieved set (`retrieval.chunks` in the response).
 - **A forced hallucinated `chunkId` results in the claim being dropped**, not shipped — test this deliberately.
 - A calorie-target request is refused **before** any embedding or search call is made (verify via logs, not by inspection).
-- An out-of-corpus question returns `NOT_IN_CORPUS` naming the documents searched, with no model call.
+- An out-of-corpus question returns `NOT_IN_CORPUS` naming the documents searched, with no model call. *(As of 2026-10-06: only in filtered mode; otherwise it gets the uncited general-knowledge answer.)*
 - The response envelope keeps its Milestone 1 shape: `{ conversationId, answer, claims[] }` plus `retrieval`.
 - Retrieval happens **before** the rate-limiter reservation, so chunk tokens are counted.
 
@@ -252,7 +266,7 @@ The API contract conclusion holds: `{ conversationId, answer, claims[] }` keeps 
 
 - **Rewrite** the `SourcesPanel` populated branch — it currently assumes `source` is a bare URL. Render document, publisher, year, section, link, **and the cited chunk text**.
 - Group citations by document when claims cite different publishers, so a disagreement reads as a disagreement.
-- Distinguish the two refusals: not-in-corpus shows what was searched; out-of-scope shows the professional-referral message with no retrieval block.
+- Distinguish the two refusals: not-in-corpus shows what was searched; out-of-scope shows the professional-referral message with no retrieval block. *(Added 2026-10-06: general-knowledge answers carry a "General knowledge — not from the cited official documents" badge and no sources.)*
 - A document-filter UI control is **optional** and not required for completion.
 
 **Exit criteria**
@@ -359,7 +373,7 @@ Each changes measured results, so each must be fixed and recorded before the que
 | 5 | `k` | 5 — **budget-bound, see Risks** | Phase 20 |
 | 6 | Index type | HNSW, cosine (pgvector), created by migration | Phase 13 |
 | 7 | Sufficiency thresholds | Calibrate against the bank | Phase 20 |
-| 8 | `restricted` chunk policy | Flag and retrieve, never restate targets | Phase 14 |
+| 8 | `restricted` chunk policy | Flag and retrieve, never restate targets *(as built: flag dropped 2026-10-03; enforced by scope guard + prompt)* | Phase 14 |
 | 9 | Near-miss corpus boundary | **Not children** | Phase 12 |
 | 10 | Document-filter UI | API + eval only | Phase 19 |
 
@@ -375,7 +389,7 @@ Each changes measured results, so each must be fixed and recorded before the que
 | **Wrong edition ingested** | Already hit 2 of 11 candidates. Produces a fabricated citation behind a working link | `expectTitleContains` / `expectYearIn` abort the ingest | 12, 14 |
 | **Short documents crowded out** | EFSA is 18× the DGA by word count | Per-document recall reporting first; per-document quotas only if needed | 14, 20 |
 | **Asymmetric deploys against one database** | One host runs new code, the other old, against the same Postgres | Additive-only migrations; verify both URLs | 13, 22 |
-| **Embedding provider is a new dependency** | Groq has no embeddings endpoint, so this is a new credential and failure domain | Offline corpus embedding; hard-fail on query-embed failure with **no ungrounded fallback** | 15 |
+| **Embedding provider is a new dependency** | Groq has no embeddings endpoint, so this is a new credential and failure domain | Offline corpus embedding; hard-fail on query-embed failure with **no ungrounded fallback**. *(As built: embeddings are computed locally with bge-small, so no new credential; the model only loads on the Railway container.)* | 15 |
 
 ---
 

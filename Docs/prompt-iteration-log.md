@@ -1,5 +1,7 @@
 # Prompt Iteration Log
 
+> **Status as of 2026-10-06:** this logs the Milestone 1 prompt iteration (prompt versions `7939902e9b` → `eabb1ca8b1`). Later prompt changes were not run through this harness: `SYSTEM_PROMPT_RAG` (Milestone 2), the 2026-10-04 scope and population-framing fixes, and `SYSTEM_PROMPT_GENERAL` (2026-10-06). Their measurements are in [retrieval-report.md](retrieval-report.md) and the commit history.
+
 Documents each `systemPrompt.ts` change and its measured before/after effect on `npm run eval`, per implementation-plan.md Phase 9. Raw logs: [failure-log-before-iteration.md](failure-log-before-iteration.md) (baseline) and [failure-log.md](failure-log.md) (current).
 
 ---

@@ -1,5 +1,7 @@
 # Ingestion Report
 
+> Status as of 2026-10-06: this report records the 3–4 Oct 2026 runs and is not regenerated. The live corpus is now 7 documents / 226 chunks / 226 embedded, config `b63742d51a` — WHO publication-page chrome was stripped at extraction on 2026-10-04 (WHO sodium 4 → 2 chunks, Five keys 2 → 1). The 6 Oct scheduled run failed on a transient who.int glitch; a manual re-run succeeded and issue #1 is closed.
+
 What the corpus pipeline fetched, parsed, chunked, embedded and stored, and the
 evidence for each step.
 

@@ -22,10 +22,10 @@ Every number here is measured against the live corpus, not estimated.
 **Why a local model rather than a hosted embeddings API.** Groq serves generation only and has
 no embeddings endpoint, so a hosted embedder would be a *new* provider, a *new* credential and a
 *new* thing that can rate-limit or go down in the middle of a request. A local model makes
-embedding a build dependency instead. The corpus is 229 chunks; the whole thing embeds in about
+embedding a build dependency instead. The corpus is 226 chunks; the whole thing embeds in about
 two minutes on CPU, so there is nothing to buy with a network round trip.
 
-**Why bge-small and not something larger.** 384 dimensions against 229 chunks is already far
+**Why bge-small and not something larger.** 384 dimensions against 226 chunks is already far
 more capacity than the corpus needs — measured `recall@5` is 17/17. A larger model would cost
 load time and memory to improve a number that is already at ceiling.
 
@@ -104,7 +104,9 @@ not editing a constant.
   a permanent 503 until someone restarted the container by hand.
 - **Embedding failure is a hard failure.** There is deliberately no fallback from "cannot embed"
   to "answer from model knowledge"; that path returns exactly the ungrounded answers this system
-  exists to prevent. The route returns 503 and says so.
+  exists to prevent. The route returns 503 and says so. (The labelled general-knowledge tier added
+  on 2026-10-06 is not that fallback: it is reached only when retrieval *succeeds* and the
+  sufficiency gate finds nothing strong enough, and it returns no citations.)
 
 ---
 
@@ -122,7 +124,9 @@ query ------------------------------------- EMBED (with query prefix)
 
 Embedding happens twice with the same model and the same precision, once per side. Everything
 downstream — ranking, the sufficiency floors, citation binding — assumes those two sides are
-comparable.
+comparable. The gate's verdict picks the answer tier: a passing gate produces a **grounded**
+answer with server-bound citations; a failing one (in all-documents mode) produces a
+**general-knowledge** answer, labelled as such in the UI and carrying no claims.
 
 ---
 
@@ -142,9 +146,12 @@ never interpolated.
 ## 8. Measured state
 
 ```
-7 documents · 229 chunks · 229 embedded · 384 dimensions · int8
+7 documents · 226 chunks · 226 embedded · 384 dimensions · int8 · configHash b63742d51a
 recall@5 17/17 · document_recall@5 17/17 · 0 false refusals · adversarial 8/8
 ```
+
+As of 2026-10-06. The corpus was 229 chunks until 2026-10-04, when WHO publication-page chrome was
+stripped at extraction; retrieval metrics are from `Docs/retrieval-report.md` (generated 2026-10-04).
 
 ---
 

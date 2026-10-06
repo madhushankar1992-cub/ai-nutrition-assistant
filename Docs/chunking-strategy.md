@@ -112,7 +112,7 @@ Each threshold exists because a simpler rule failed on real documents:
 
 ## 5. Measured results
 
-From the live store (229 chunks, 7 documents):
+From the live store as of 2026-10-03 (229 chunks, 7 documents):
 
 ```
 min=31  p25=220  median=454  p75=481  max=819  mean=375
@@ -129,6 +129,14 @@ prose=205  table=12  references=7  toc=5  restricted=11
 | FSA — chill/freeze/defrost | 12 | 189 | 129 | 321 | 0 |
 | WHO — Sodium guideline | 4 | 138 | 57 | 191 | 2 |
 | WHO — Five keys | 2 | 91 | 31 | 151 | 1 |
+
+**Current (as of 2026-10-06): 226 chunks, 7 documents, retrieval config `b63742d51a`.** On
+2026-10-04 the WHO publication-page catalogue chrome (the "Editors / ISBN / Copyright" sidebar,
+language switcher and related-publication link lists) was stripped at extraction
+(`PUBLICATION_PAGE_CHROME_CLASSES` + `removeElementsByClass` in `lib/corpus/extract.ts`). That
+took the WHO sodium guideline 4 → **2** and Five keys 2 → **1**; the other five sources produced
+byte-identical chunks. The per-document figures above are otherwise unchanged; the distribution
+line was measured before that cleanup.
 
 **Section confidence** (how much to trust a citation's section label): `numbered` 45.9% · `typographic` 34.1% · `outline` 18.3% · `inherited` 1.7%.
 
@@ -180,7 +188,7 @@ Every strategy loses something; naming the loss is part of the deliverable.
 - **Oversized table chunks skew retrieval.** A whole table is long and number-dense, so it matches many numeric queries weakly rather than one strongly. Accepted: the alternative is citations that cannot be checked.
 - **Uneven chunk sizes mean uneven scores.** Cosine similarity is not length-invariant in practice; a 121-token chunk and an 819-token table are not competing on equal footing.
 - **Overlap duplicates content**, so two near-identical chunks can both occupy the top-`k`. Mitigate with near-duplicate suppression after retrieval.
-- **HTML sources chunk worse than PDFs.** They have no page structure, so section detection leans on the weakest heuristic. The three remaining under-floor chunks are all HTML tails.
+- **HTML sources chunk worse than PDFs.** They have no page structure, so section detection leans on the weakest heuristic. The remaining under-floor chunks are all HTML tails.
 
 ---
 
@@ -230,10 +238,10 @@ That is **~1–1.5 requests per minute**. A full evaluation is 60+ calls, so **4
 
 | # | Item | Status |
 |---|---|---|
-| 1 | 3 chunks still under the floor | Accept. All three are in the two WHO landing pages, whose entire body is shorter than one normal chunk |
+| 1 | Chunks under the floor | Accept. They are all in the two WHO landing pages (3 chunks there as of 2026-10-03; 2 + 1 since the 2026-10-04 chrome strip), whose entire body is shorter than one normal chunk |
 | 2 | Heading misdetection on PDF sections | Accept — imprecise, not incorrect. No longer applies to HTML, which uses its own `<h*>` outline |
 | 3 | Near-duplicate suppression after retrieval | Not implemented; overlap makes it worthwhile |
 | 4 | Linearised table rendering (`col: value`) for embedding | Untested against raw table text |
 | 5 | ~~Leftovers query ranks the wrong chunk first~~ | **Closed.** Cause was chunk size, not ranking: HTML has no page breaks, so a 500-token target produced 757-token chunks containing every query term. `HTML_CHUNK_TARGET_TOKENS = 220` + density-based lexical scoring. Now rank 1 |
 | 6 | ~~EFSA returns the right document, wrong section~~ | **Closed** by bug 6 above — bibliographies and contents pages excluded from retrieval |
-| 7 | Chrome stripping is regex-based, not a DOM parse | Accept for a 9-document corpus, and it is guarded: a container yielding under 50 words is rejected and the full page used instead. A new HTML source should be checked with `npm run vectors` after its first ingest |
+| 7 | Chrome stripping is regex-based, not a DOM parse | Accept for a 7-document corpus, and it is guarded: a container yielding under 50 words is rejected and the full page used instead. A new HTML source should be checked with `npm run vectors` after its first ingest |

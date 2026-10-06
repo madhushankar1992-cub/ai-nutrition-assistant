@@ -5,10 +5,12 @@
 **Status markers used throughout:**
 
 - **`[BUILT]`** — exists and runs today, deployed and verified live on both Vercel and Railway.
-- **`[TO BUILD]`** — the Milestone 2 retrieval design. Decided, but not yet code.
+- **`[TO BUILD]`** — the Milestone 2 retrieval design. Decided, but not yet code. *(As of 2026-10-06 Milestone 2 is built and deployed; markers on things that now exist read `[BUILT]`, and where the build differs from the plan an "As built" note says how.)*
 - **`[OPEN]`** — genuinely undecided. Listed in §31 rather than quietly assumed.
 
-**Live deployments:** [Vercel](https://ai-nutrition-assistant-self.vercel.app) · [Railway](https://app-production-3fe4f.up.railway.app) — identical codebase, one shared Railway Postgres.
+> **Status as of 2026-10-06.** Milestones 1 and 2 are both built and live. The corpus is 7 documents / 226 chunks / 226 embedded (config hash `b63742d51a`). Since 2026-10-06 the system answers in **two tiers**: *grounded* (cited, from the corpus) when the sufficiency gate passes, and a labelled, citation-free *general-knowledge* answer when it fails in all-documents mode (§15.2). Every response carries `answerMode: "grounded" | "general" | "refused"`. Where this document says an uncovered question is refused with a not-in-corpus message, that now holds only in filtered mode (`documentKey` set).
+
+**Live deployments:** [Vercel](https://ai-nutrition-assistant-self.vercel.app) · [Railway](https://app-production-3fe4f.up.railway.app) — identical codebase, one shared Railway Postgres. Vercel serves the UI and forwards `/api/chat` to Railway via `BACKEND_API_URL`, because the local embedding model cannot load in a serverless function (§27).
 
 ---
 
@@ -27,7 +29,7 @@ RAG fixes this by changing where answers come from. Instead of asking the model 
 
 The last step is the one that matters most. The model never writes a publisher name or a year — it only points at a passage it was handed. Everything shown to the user as a citation is looked up from our own records. That makes a fabricated citation structurally impossible rather than merely discouraged.
 
-And when the closest passages still don't answer the question, the system says so and names what it searched, instead of guessing.
+And when the closest passages still don't answer the question, the system never dresses up a guess as a cited answer. *(As built, 2026-10-06: in all-documents mode it gives a general-knowledge answer, labelled as not coming from the cited documents and carrying no citations; in filtered mode it says the named document doesn't cover it and names what it searched. See §15.2.)*
 
 ```
           Question
@@ -42,8 +44,8 @@ And when the closest passages still don't answer the question, the system says s
    └────────┬─────────┘
             ▼
    ┌──────────────────┐   nothing good enough?
-   │ Good enough?     ├──────────────► "The guidance I searched doesn't cover this."
-   └────────┬─────────┘
+   │ Good enough?     ├──────────────► General-knowledge answer, labelled, no citations
+   └────────┬─────────┘                (filtered to one document: "it doesn't cover this")
             ▼
    ┌──────────────────┐
    │  Model writes    │  ← sees ONLY those passages
@@ -100,9 +102,9 @@ And when the closest passages still don't answer the question, the system says s
 
 **Part VI — Operations**
 26. [Token and rate-limit budget](#26-token-and-rate-limit-budget)
-27. [Deployment and migration order](#27-deployment-and-migration-order)
+27. [Deployment and migration order](#27-deployment-and-migration-order) (incl. 27.1 Local Docker stack)
 28. [Failure modes](#28-failure-modes)
-29. [Security and prompt injection](#29-security-and-prompt-injection)
+29. [Security and prompt injection](#29-security-and-prompt-injection) (incl. 29.1 Application and repository protections)
 
 **Part VII — Verification**
 30. [Evaluation](#30-evaluation)
@@ -133,7 +135,7 @@ Milestone 1 was built deliberately without retrieval, so that its failures would
 
 - **Retrieval can fail.** The right passage may not come back. This is a different bug from a bad answer, and needs its own measurement (§30).
 - **A citation can point at the right passage while the claim misreads it.** No code can detect this. A manual spot-check is the only control (§18).
-- **The corpus is small.** Five to seven documents know far less than the model does. Some questions Milestone 1 answered well will now be refused. That is a real cost, not a bug, and the evaluation reports it (§30.4).
+- **The corpus is small.** Five to seven documents know far less than the model does. Some questions Milestone 1 answered well will now be refused. That is a real cost, not a bug, and the evaluation reports it (§30.4). *(As built, 2026-10-06: the general-knowledge tier (§15.2) now answers food questions the corpus does not cover, labelled and uncited, so the cost is a loss of citations on those answers rather than a refusal.)*
 
 ## 2. What Milestone 1 already provides
 
@@ -142,7 +144,7 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 | Component | What it is | What Milestone 2 does to it |
 |---|---|---|
 | `app/api/chat/route.ts` | The single backend route, `POST` + `DELETE`. There is no separate backend service | Insert retrieval between the scope guard and the model call. No new service |
-| Response envelope | `{ conversationId, answer, claims[] }` | **Frozen.** `source` gets populated; a `retrieval` field is added alongside. Nothing is renamed or restructured |
+| Response envelope | `{ conversationId, answer, claims[] }` | **Frozen.** `source` gets populated; a `retrieval` field is added alongside (and, since 2026-10-06, `answerMode`). Nothing is renamed or restructured |
 | `lib/schema.ts` | Zod schemas, single source of truth — converted into the model's JSON-schema structured-output format *and* reused to validate both request and response | `source` widens from `z.null()` to a citation object. A second, narrower schema is added for what the model is allowed to emit (§20) |
 | `lib/scopeGuard.ts` | Regex-based code-level guard. Not a classifier, not prompt-reliant. Runs before the model call against recent history plus the new message, and again over the generated answer | Kept exactly as-is. Retrieval is inserted *after* it, never before (§12) |
 | `components/SourcesPanel.tsx` | The panel exists; the "no source yet" branch is live and the populated branch was written in M1 and **has never executed** | The populated branch needs rewriting, not just enabling — it assumes `source` is a bare URL (§22) |
@@ -155,9 +157,9 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 ### 3.1 Goals
 
 1. Every claim the system ships carries a citation naming **document, publisher, year and a link**.
-2. Answers come from retrieved text only. Model knowledge is not a source.
+2. Answers come from retrieved text only. Model knowledge is not a source. *(As built, 2026-10-06: this holds for every grounded, cited answer. Uncovered food questions get a separate general-knowledge answer that is labelled as such and carries no citations — §15.2.)*
 3. A fabricated citation is **structurally impossible**, not merely discouraged.
-4. When the corpus doesn't cover a question, the system says so and names what it searched.
+4. When the corpus doesn't cover a question, the system says so and names what it searched. *(As built, 2026-10-06: in filtered mode; in all-documents mode it says so through the `answerMode: "general"` label and badge instead — §15.2.)*
 5. Two documents that disagree are both shown, with publishers and years. No winner is picked.
 6. The Milestone 1 interface, endpoints and response shape are unchanged.
 
@@ -166,7 +168,7 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 | Constraint | Where it comes from | Consequence |
 |---|---|---|
 | No calorie targets, weight targets, or medical advice — anywhere | Problem statement, both milestones | The scope guard runs **first**, before any retrieval (§12), and this holds even when the corpus contains the answer (§25) |
-| 5–7 documents | Problem statement | A small corpus makes "not covered" a frequent, real answer rather than an edge case |
+| 5–7 documents | Problem statement | A small corpus makes "not covered" a frequent, real outcome rather than an edge case (since 2026-10-06 answered by the labelled general tier, §15.2) |
 | Population-level guidance stays population-level | Problem statement | Retrieved text about adults generally is never restated as advice for the asker |
 | Tokens-per-minute ceiling | Groq tier: 8,000 tok/min, limiter targets 7,000 | **This is the binding constraint on the whole design.** `k` × chunk size lands directly in it (§26) |
 | No local filesystem | Vercel serverless has an ephemeral filesystem | The vector index cannot be a file on disk. Same constraint that forced Postgres over SQLite in M1 |
@@ -190,10 +192,10 @@ The retrieval layer is an insertion into a working system, not a rewrite. `[BUIL
 | Validation | Zod + `zod-to-json-schema` `[BUILT]` | One schema definition drives both the model's output format and our validation of it |
 | Database | Postgres + Prisma `[BUILT]` | Required by serverless; shared by both deployments |
 | **Vector store** | **pgvector, in the Postgres both deployments share** `[BUILT]` | Chroma Cloud was tried and **removed**: it added a third provider and a third credential, and its availability was outside our control — an outage took the whole ingest pipeline down. A file-based index (FAISS) cannot survive Vercel's ephemeral filesystem. pgvector puts the index beside the provenance a citation is built from |
-| **Index type** | **HNSW, cosine** `[BUILT]` | **Measured, not assumed:** a real ingest produces **232 chunks** (§34). At that size the index barely affects recall; HNSW is created once by `ensureVectorSchema()` |
-| **Embeddings** | **`BAAI/bge-small-en-v1.5`, run locally via ONNX (384 dims)** `[BUILT]` | Groq has no embeddings endpoint, so an embedding dependency exists either way. Running it locally makes it a *build* dependency rather than a runtime credential and a second failure domain, and 232 chunks embed in under a minute on CPU. **bge is asymmetric**: queries need an instruction prefix, passages do not (§9) |
+| **Index type** | **HNSW, cosine** `[BUILT]` | **Measured, not assumed:** a real ingest produces **226 chunks** (as of 2026-10-04; 232 at the first ingest, then 229, before extraction cleanups — §34). At that size the index barely affects recall; HNSW is created once by `ensureVectorSchema()` |
+| **Embeddings** | **`BAAI/bge-small-en-v1.5`, run locally via ONNX (384 dims)** `[BUILT]` | Groq has no embeddings endpoint, so an embedding dependency exists either way. Running it locally makes it a *build* dependency rather than a runtime credential and a second failure domain, and the 226 chunks embed in under a minute on CPU. Weights are int8-quantised (~33 MB). **bge is asymmetric**: queries need an instruction prefix, passages do not (§9) |
 | **PDF parsing** | **Offline script** `[OPEN]` — `unpdf`/`pdf-parse` (TypeScript) or PyMuPDF (Python) | Runs at build time, so language is free. Verified during corpus research that plain `pypdf` extracts every candidate cleanly *except* the graphical Eatwell plate — so table fidelity, not basic extraction, decides this |
-| **Orchestration** | **Plain TypeScript. No LangChain** `[TO BUILD]` | The pipeline is seven explicit steps. The citation-binding step (§18) is the single most important piece of code in the system and must be auditable at a glance. A framework would hide it |
+| **Orchestration** | **Plain TypeScript. No LangChain** `[BUILT]` | The pipeline is seven explicit steps. The citation-binding step (§18) is the single most important piece of code in the system and must be auditable at a glance. A framework would hide it |
 | Rate limiting | In-memory limiter `[BUILT]` + chunk tokens now counted | Process-local and best-effort; Groq's own 429 is the authoritative backstop |
 
 ---
@@ -247,6 +249,8 @@ From the 39 URLs checked in [problemStatement.md](problemStatement.md) (35 retur
 
 **Total: roughly 95,000–135,000 words → ~300–400 chunks.** Small enough that exact search is correct (§4), and small enough that "not covered" will be a frequent, genuine answer.
 
+> **As built (2026-10-04):** these seven are the registry in `lib/corpus/sources.ts` — exactly 7 sources, all fetched, all ingesting — and the real corpus is **226 chunks** (fewer than estimated: the WHO entries are HTML pages, and bibliographies/contents pages are classified and excluded). An HNSW index was built anyway (§4, §41). Since 2026-10-06 "not covered" is answered by the labelled general tier rather than refused (§15.2).
+
 Four publishers, two document classes, three continents. Strong substitutes if one must be dropped: *Dietary Guidelines for the Brazilian Population* (Ministry of Health of Brazil, 2015, 152 pp. — verified, prose-heavy and notably light on numeric targets, which makes it low-risk for the scope guard), the SACN reports, or the ICMR-NIN 2011 manual.
 
 ### 5.4 Two traps found by actually reading the documents
@@ -287,6 +291,8 @@ This does not block ingestion for a non-commercial project, but an unrecorded re
 ## 6. Acquisition
 
 Three of the strongest food-safety sources return **HTTP 403 to programmatic requests even with a full Chrome user-agent**: FoodSafety.gov's cold-storage charts, the USDA FSIS temperature chart, and the superseded DGA PDF. A fourth, Nordic Nutrition Recommendations 2023, does the same.
+
+> **As built:** none of these is in the corpus. The two US food-safety charts were registered for a time, never produced a chunk, and were **removed from the registry on 2026-10-03**. All 7 current sources are `acquisition: "fetched"`; the manual path below exists in the `Acquisition` type but no source uses it.
 
 So acquisition has two paths:
 
@@ -402,7 +408,7 @@ An embedding turns text into a list of numbers positioned so that similar meanin
 ### 9.2 Three operational facts
 
 1. **Dimension is a schema commitment, not a setting.** `384` dimensions match `bge-small-en-v1.5`. Changing provider changes the column type *and* requires re-embedding the whole corpus. `Chunk.configHash` makes a half-migrated index detectable with a query instead of by memory.
-2. **Query embeddings are cached** by normalised query hash. The retrieval evaluation asks the same 15+ questions repeatedly; without caching that dominates the embedding bill.
+2. **Query embeddings are cached** by normalised query hash. The retrieval evaluation asks the same 15+ questions repeatedly; without caching that dominates the embedding bill. *(As built: not implemented. With a local model there is no embedding bill, so only the loaded model is cached, not individual query vectors.)*
 3. **Embedding failure is a hard failure.** If the query cannot be embedded, the correct response is an error. Falling back to "answer from model knowledge" would violate the central rule of the milestone — so that fallback must not exist.
 
 ## 10. The ingestion pipeline, end to end
@@ -443,8 +449,10 @@ corpus/manifest.json
 └──────────────────────────────────────────────────────────────┘
         │
         ▼
-Postgres + pgvector: 232 vectors + provenance
+Postgres + pgvector: 226 vectors + provenance   (232 at first ingest; 226 since 2026-10-04)
 ```
+
+> **As built:** the manifest is the registry in `lib/corpus/sources.ts` (there is no `corpus/manifest.json`), every source is fetched, and step 7's `Chunk.restricted` flag was dropped on 2026-10-03 (migration `20261003160000_drop_chunk_restricted`) because nothing ever read it — restricted-content policy is enforced by `lib/scopeGuard.ts` instead (§25). `scripts/ingest.ts` also runs daily on GitHub Actions (`.github/workflows/corpus-ingest.yml`, cron `45 3 * * *` = 09:15 IST).
 
 Properties that matter:
 
@@ -463,10 +471,13 @@ Properties that matter:
 Steps 1–2 and the final persist/respond steps are unchanged from Milestone 1. The middle is new.
 
 ```
-POST /api/chat { conversationId?, message, documentId? }
+POST /api/chat { conversationId?, message, documentKey? }
     │
-    ├─ Validate body (Zod)                                      [BUILT]
-    ├─ Load/create conversation, load prior messages             [BUILT]
+    ├─ BACKEND_API_URL set (Vercel)? forward verbatim to Railway [BUILT]
+    ├─ Validate body (Zod; message ≤ 4,000 chars)                [BUILT]
+    ├─ Unknown/disabled documentKey → 400                        [BUILT]
+    ├─ Load/create conversation, check nk_owner cookie → 404     [BUILT]
+    │  on mismatch; load prior messages
     │
     ├─ ① SCOPE GUARD ─────────────────────────────── refuse ───► return
     │     checkRequest(last 6 turns + message)                   [BUILT]
@@ -474,19 +485,22 @@ POST /api/chat { conversationId?, message, documentId? }
     │
     ├─ Persist user message                                      [BUILT]
     │
-    ├─ ② EMBED QUERY                                             [TO BUILD]
-    │     one short string → vector. cached.
+    ├─ ② EMBED QUERY                                             [BUILT]
+    │     one short string → vector. failure → 503, no fallback.
     │
-    ├─ ③ VECTOR SEARCH                                           [TO BUILD]
-    │     top-k over Chunk, JOIN Document for provenance
+    ├─ ③ VECTOR SEARCH                                           [BUILT]
+    │     over-fetch k×4 over Chunk, JOIN Document for provenance,
+    │     re-rank (IDF-weighted lexical density), keep top k
     │     mode: all documents | filtered to one
     │
     ├─ ④ SUFFICIENCY GATE ───────────── insufficient ──────────► return
-    │     scores good enough?                                    [TO BUILD]
-    │     NOT_IN_CORPUS refusal, naming what was searched.
-    │     The model is never asked to write from bad material.
+    │     scores good enough?                                    [BUILT]
+    │     filtered mode: NOT_IN_CORPUS refusal, naming what was searched.
+    │     all-documents mode (2026-10-06): general-knowledge answer,
+    │       claims [], answerMode "general" (§15.2).
+    │     The model is never asked to write a CITED answer from bad material.
     │
-    ├─ ⑤ COMPOSE PROMPT                                          [TO BUILD]
+    ├─ ⑤ COMPOSE PROMPT                                          [BUILT]
     │     SYSTEM_PROMPT_RAG + numbered chunks (with chunkIds)
     │     + trimmed history + question
     │
@@ -494,21 +508,21 @@ POST /api/chat { conversationId?, message, documentId? }
     │     Groq, json_schema strict. Claims carry chunkId only.
     │     One schema-correction retry on failure.
     │
-    ├─ ⑦ BIND CITATIONS                                          [TO BUILD]
+    ├─ ⑦ BIND CITATIONS                                          [BUILT]
     │     resolve each chunkId against THIS request's results
     │     unresolvable → drop the claim
     │     citation built from the Document row, not model output
     │     ← replaces M1's "force source = null"
     │
     ├─ checkResponse(answer) — post-call guard                   [BUILT]
-    ├─ Persist assistant message + claims + RetrievalRecord
-    └─ Return { conversationId, answer, claims[], retrieval }
+    ├─ Persist assistant message + claims (RetrievalRecord: never built)
+    └─ Return { conversationId, answer, claims[], answerMode, retrieval }
 ```
 
 **Why this order.** Two orderings are load-bearing and neither is incidental:
 
 - **Scope guard before everything.** A calorie request must be refused on policy, not reported as a coverage gap. Refusing first also makes it free.
-- **Sufficiency gate before generation.** Hand a capable model weak passages and it writes a confident answer from the nearest available text. Gating earlier converts a wrong answer into a refusal.
+- **Sufficiency gate before generation.** Hand a capable model weak passages and it writes a confident answer from the nearest available text. Gating earlier converts a wrong answer into a refusal. *(Since 2026-10-06, in all-documents mode, into a labelled uncited general answer instead — never into a cited answer built on weak passages; §15.2.)*
 
 ## 12. Step 1 — Scope guard
 
@@ -532,9 +546,9 @@ Regexes miss novel phrasings. The mitigations are `checkResponse` and measuremen
 
 ## 13. Step 2 — Query embedding
 
-One call, one short string. Cached by normalised query hash.
+One call, one short string. Cached by normalised query hash. *(As built: `embedQuery` in `lib/corpus/embeddings.ts`, run locally with the bge query prefix; no per-query cache — §9.2.)*
 
-The important design point is the **absence of a fallback**. If embedding fails, the request fails. There is deliberately no path from "embedding unavailable" to "answer from model knowledge", because that path would silently return exactly the ungrounded answers this milestone exists to eliminate.
+The important design point is the **absence of a fallback**. If embedding fails, the request fails (503). There is deliberately no path from "embedding unavailable" to "answer from model knowledge", because that path would silently return exactly the ungrounded answers this milestone exists to eliminate.
 
 ## 14. Step 3 — Vector search and the two retrieval modes
 
@@ -548,13 +562,15 @@ async function search(args: SearchArgs): Promise<RetrievedChunk[]>;
 
 Both modes `JOIN Document`, so provenance comes back with the text. **Retrieval never returns a chunk it cannot attribute.**
 
+> **As built:** the entry point is `retrieve(question, { k?, documentKey? })` in `lib/retrieval.ts`. It embeds the question, over-fetches `k × 4` candidates with `queryChunks` (`lib/corpus/vectorStore.ts`), re-ranks them by IDF-weighted lexical density, applies a source-diversity swap, and returns `{ chunks, sufficient, reason, documentsSearched, k }`. The filter is a registry `documentKey` (e.g. `who-sodium-guideline`), not a `documentId` UUID.
+
 ### 14.2 All-documents mode
 
-`documentId` omitted. Cosine similarity across the whole `Chunk` table, top `k`.
+`documentId` omitted (as built: `documentKey`). Cosine similarity across the whole `Chunk` table, top `k`.
 
 ### 14.3 Filtered mode
 
-`documentId` set — "what does the WHO sodium guideline say about this".
+`documentId` set (as built: `documentKey`; an unknown or disabled key is a 400) — "what does the WHO sodium guideline say about this".
 
 **The filter goes in the SQL `WHERE` clause, not in a post-filter on an all-documents result.** This is not a performance nicety. Post-filtering returns fewer than `k` chunks — often zero — whenever the named document isn't already in the global top-`k`, which is precisely the situation filtered retrieval exists to serve. Getting this wrong produces a feature that appears to work until the moment it matters.
 
@@ -570,7 +586,7 @@ Mitigations, in order:
 
 ## 15. Step 4 — The sufficiency gate
 
-This is the mechanism behind the "not in the corpus" refusal.
+This is the mechanism behind the "not in the corpus" refusal. *(Since 2026-10-06 the gate decides between the grounded and general tiers; the refusal itself remains only in filtered mode — §15.2.)*
 
 ```
 insufficient if:
@@ -580,7 +596,7 @@ insufficient if:
 
 Deliberately simple and inspectable. The alternative — asking the model to judge its own retrieval — costs a call and produces a decision that cannot be unit-tested.
 
-**The thresholds are calibrated, not guessed.** They must admit every question in the 15+ bank whose correct chunk is known to exist, and reject the adversarial not-covered cases. That calibration is itself a deliverable, and the chosen numbers belong in the README beside `k`.
+**The thresholds are calibrated, not guessed.** They must admit every question in the 15+ bank whose correct chunk is known to exist, and reject the adversarial not-covered cases. That calibration is itself a deliverable, and the chosen numbers belong in the README beside `k`. *(As built: `absoluteFloor` 0.50 and `relevanceFloor` 0.55 in `lib/retrievalConfig.ts`; the 2026-10-04 report shows 0 false refusals on 17 answerable questions and 8/8 adversarial cases.)*
 
 ### 15.1 The near-miss problem — the weakest point in this design
 
@@ -615,7 +631,7 @@ The retrieval metrics are unaffected. `npm run eval:retrieval`'s adversarial `no
 
 ## 16. Step 5 — Prompt composition
 
-`SYSTEM_PROMPT_RAG` is a **second** exported prompt in `lib/systemPrompt.ts`, not an edit of the first. The M1 prompt stays so the before/after comparison can still be run against it. *(As built: the M1 prompt and its ungrounded code path were removed on 2026-10-04 once nothing called them; `SYSTEM_PROMPT_RAG` is now the only prompt. The M1 text remains in git history.)*
+`SYSTEM_PROMPT_RAG` is a **second** exported prompt in `lib/systemPrompt.ts`, not an edit of the first. The M1 prompt stays so the before/after comparison can still be run against it. *(As built: the M1 prompt and its ungrounded code path were removed on 2026-10-04 once nothing called them; `SYSTEM_PROMPT_RAG` is now the only prompt for grounded answers. The M1 text remains in git history. Since 2026-10-06 a second prompt, `SYSTEM_PROMPT_GENERAL`, drives the uncited general tier only — §15.2.)*
 
 Chunks are rendered as a numbered, clearly delimited block, each tagged with its `chunkId`, section and publisher:
 
@@ -717,6 +733,8 @@ No code can detect that. Which is exactly why the problem statement requires a *
 }
 ```
 
+> **As built `[BUILT]`:** the filter field is `documentKey` (a registry key from `lib/corpus/sources.ts`, e.g. `"who-sodium-guideline"`), not `documentId`. An unknown or disabled key returns **400** rather than a 200 "nothing found" — a client typo is not a coverage gap. `message` is capped at **4,000 characters** (`MAX_MESSAGE_CHARS` in `lib/limits.ts`, enforced by `ChatRequestSchema` on the server and by `ChatInput` in the browser). `conversationId` is accepted only if the caller's signed `nk_owner` cookie owns it (§29).
+
 ### 19.2 Response — the envelope is frozen
 
 Milestone 1 `[BUILT]`:
@@ -725,12 +743,13 @@ Milestone 1 `[BUILT]`:
 { "conversationId": "uuid", "answer": "string", "claims": [{ "text": "string", "source": null }] }
 ```
 
-Milestone 2 `[TO BUILD]` — identical shape, `source` populated, `retrieval` **added**:
+Milestone 2 `[BUILT]` — identical shape, `source` populated, `retrieval` **added**, and since 2026-10-06 `answerMode` **added** (§15.2):
 
 ```json
 {
   "conversationId": "uuid",
   "answer": "string",
+  "answerMode": "grounded",
   "claims": [
     {
       "text": "Adults should limit free sugars to less than 10% of total energy intake.",
@@ -755,15 +774,22 @@ Milestone 2 `[TO BUILD]` — identical shape, `source` populated, `retrieval` **
 }
 ```
 
+*(As built: `retrieval` also carries `sufficient` and `reason`; each chunk carries `documentName`, `publisher`, `year` and `page` in place of `documentId`, and `vectorScore` and `lexicalScore` alongside `score`. `answerMode` is `"grounded" | "general" | "refused"`; a `general` reply always has `claims: []`.)*
+
 ### 19.3 Status codes
 
 | Situation | Code | Body |
 |---|---|---|
 | Normal answer | 200 | As above |
-| Out-of-scope refusal | 200 | Fixed `REFUSAL_MESSAGE`, `claims: []`, **no** `retrieval` block |
-| Not-in-corpus refusal `[TO BUILD]` | 200 | `NOT_IN_CORPUS` message, `claims: []`, `retrieval.documentsSearched` populated so the answer can name what it searched. Since 2026-10-06 only in filtered mode (`documentKey` set); see §15.2 |
+| Out-of-scope refusal | 200 | Fixed `REFUSAL_MESSAGE`, `claims: []`, `answerMode: "refused"`, **no** `retrieval` block |
+| Off-topic (non-food) request | 200 | `OFF_TOPIC_MESSAGE`, `claims: []`, `answerMode: "refused"` |
+| Not-in-corpus refusal `[BUILT]` | 200 | `NOT_IN_CORPUS` message, `claims: []`, `retrieval.documentsSearched` populated so the answer can name what it searched. Since 2026-10-06 only in filtered mode (`documentKey` set); see §15.2 |
 | General-knowledge answer (2026-10-06) | 200 | `answerMode: "general"`, `claims: []`, `retrieval.sufficient: false`. Answered from model knowledge when the gate fails in all-documents mode |
-| Invalid request body | 400 | `{ "error": "Invalid request" }` |
+| Invalid request body (malformed JSON, or `message` over 4,000 characters) | 400 | `{ "error": "Invalid request" }` |
+| Unknown or disabled `documentKey` | 400 | `{ "error": "Unknown documentKey" }` |
+| `conversationId` owned by another browser | 404 | `{ "error": "Not found" }` — 404, not 403, so the endpoint never confirms the id exists |
+| Retrieval unavailable (embedding or store failure) | 503 | Apology, `claims: []`. No fallback to model knowledge |
+| Groq at capacity (429, local limiter, timeout) | 503 | "At capacity" message, `Retry-After: 60`; logged as `capacity` |
 | Schema validation failed after retry | 422 | Generic apology; logged as `invalid_schema` |
 
 Refusals are **200, not an error code**, and share the normal shape. A refusal is a valid answer, and the client needs no special path for it.
@@ -772,7 +798,7 @@ Refusals are **200, not an error code**, and share the normal shape. A refusal i
 
 Deletes `Claim` rows for the conversation's messages, then `Message` rows, then the `Conversation` — an explicit application-level cascade, not a DB `ON DELETE CASCADE`. (A planned `RetrievalRecord` table was never built, so there is nothing further to delete.) It **never** touches `Document` or `Chunk`: those are corpus data, not user data.
 
-> **What "frozen" means precisely.** Retrieval changes the *contents* of `source` and adds a sibling `retrieval` object. It never renames a field, never re-nests `claims`, never changes the endpoint. A client written against Milestone 1 keeps working — it ignores `retrieval` and sees a non-null `source`.
+> **What "frozen" means precisely.** Retrieval changes the *contents* of `source` and adds a sibling `retrieval` object (and, since 2026-10-06, a sibling `answerMode`). It never renames a field, never re-nests `claims`, never changes the endpoint. A client written against Milestone 1 keeps working — it ignores `retrieval` and sees a non-null `source`.
 
 ## 20. Schemas
 
@@ -822,7 +848,9 @@ The model must **not** be asked to produce a full citation. If it could emit `pu
 
 `Conversation` → `Message` → `Claim`, plus `EvalRun` and `FailureLogEntry` used only by the eval harness. `EvalRun.promptVersion` is `sha256(SYSTEM_PROMPT_RAG).slice(0,10)` (as built; the M1 prompt it once hashed has been removed), which is what makes "rerun all 10 after every prompt change" comparable — failures group by `(promptVersion, category)`.
 
-### 21.2 New tables `[TO BUILD]`
+### 21.2 New tables `[BUILT]`
+
+*(As built: `Document` and `Chunk` exist, plus `CorpusSource`, `CorpusSnapshot` and `ScrapeRun` for the scheduler, and `Conversation.ownerId` for ownership. The block below is the design; the inline "As built" comments mark where `prisma/schema.prisma` differs. Five migrations, all applied with `prisma migrate deploy` — never `prisma db push`, which drops the raw-SQL `embedding` column.)*
 
 ```prisma
 // Corpus provenance root. Every citation resolves to a row here.
@@ -892,15 +920,19 @@ So `Claim.source` becomes a **derived field** in the API layer, and the column i
 
 The database now enforces what §18 enforces in application code: a claim cannot store a citation to a chunk that does not exist.
 
+> **As built:** `Claim.chunkId String?` was added, but as a plain column without a foreign-key relation, and `Claim.source` was kept and holds the JSON-encoded citation built by `bindCitations`. The no-fabrication guarantee therefore rests on §18's application-level binding, which only ever writes a `chunkId` retrieved for that request.
+
 ## 22. Frontend
 
 The frontend is **not rebuilt**. `[BUILT]` today: `app/page.tsx` renders one client component, `ChatWindow`, holding all state in plain `useState` — no state library. `messages` carries each assistant message's `claims[]` inline, so selecting a message is an id lookup, not a refetch. `SourcesPanel` is a 340px right column, hidden below the `md` breakpoint.
 
-Three changes, all additive `[TO BUILD]`:
+Three changes, all additive `[BUILT]`:
 
 1. **The populated `SourcesPanel` branch must be rewritten, not merely enabled.** It currently does `href={claim.source}` and renders `{claim.source}` as the visible link text — correct only for a bare URL. With a citation object it must render document name, publisher, year, section, a link, **and the cited chunk text**, so a reader can check the claim against the passage. This is the one component where the "M1 is the identity case of M2" assumption does not hold, and the doc records that rather than glossing it.
 2. **Group citations by document** when claims cite different publishers, so a disagreement reads as a disagreement instead of two adjacent cards that look like consensus.
-3. **Distinguish the two refusals.** Not-in-corpus shows which documents were searched (from `retrieval`); out-of-scope shows the professional-referral message with no retrieval block.
+3. **Distinguish the two refusals.** Not-in-corpus shows which documents were searched (from `retrieval`); out-of-scope shows the professional-referral message with no retrieval block. *(Since 2026-10-06 the client keys this off `answerMode`: a `general` reply gets the badge "General knowledge — not from the cited official documents", and the Sources panel explains why there are no sources.)*
+
+Also as built: `ChatInput` enforces the same 4,000-character cap as the server (a counter near the limit, sending blocked over it, never truncation).
 
 A document-filter UI control is **optional** — the capability must exist in the API and be exercised by the eval harness, but exposing it is not required.
 
@@ -912,6 +944,8 @@ A document-filter UI control is **optional** — the capability must exist in th
 ## 23. The two refusals
 
 Two different mechanisms, two different messages, fixed precedence.
+
+> **As of 2026-10-06** the not-in-corpus column applies only in **filtered mode** (`documentKey` set). In all-documents mode a failed gate leads to the labelled general-knowledge tier, not a refusal (§15.2). A third refusal also exists: a non-food request answered with `OFF_TOPIC_MESSAGE` by either tier's prompt. All refusals carry `answerMode: "refused"`, and the precedence below is unchanged.
 
 | | Out of scope by design | Not in the corpus |
 |---|---|---|
@@ -978,7 +1012,7 @@ So the authoritative corpus contains per-body-weight and calorie-target content 
 
 **Three-part handling:**
 
-1. **Flag at ingestion.** Step 7 of the pipeline sets `Chunk.restricted = true` on passages carrying calorie or per-kg-bodyweight targets.
+1. **Flag at ingestion.** Step 7 of the pipeline sets `Chunk.restricted = true` on passages carrying calorie or per-kg-bodyweight targets. *(As built: the flag was computed but nothing ever read it, so it was dropped on 2026-10-03 by migration `20261003160000_drop_chunk_restricted` rather than left looking like protection. The policy is enforced where it runs — `checkRequest` before retrieval and `checkResponse` on every answer, grounded or general — and the phrasing it might have covered ("protein relative to body mass") is matched there. Since the 2026-10-05 prompt fixes (commit `82ed211`) the prompt also requires population figures to be stated third-person and attributed to their publisher, never as advice to the asker.)*
 2. **Retrieve but don't restate.** Restricted chunks remain retrievable for *population-level* questions ("what does US guidance say about protein sources"), but the prompt forbids restating their numeric targets as advice, and `checkResponse` still scans the output.
 3. **Test it explicitly.** Ask for a protein target and confirm refusal **even though a retrievable, citable chunk would answer it.** This failure mode is new in Milestone 2 — M1 could not fail this way, because M1 had no chunk to be tempted by.
 
@@ -1010,6 +1044,8 @@ Milestone 1 prompts are a system prompt plus short history. Milestone 2 prepends
 
 Against a 7,000 tok/min margin that is **roughly one to one-and-a-half requests per minute.**
 
+*(As built: history is capped at `MAX_HISTORY_TURNS = 4` in `lib/groq.ts`, mitigation 2 below. Since 2026-10-06 an uncovered question costs one general-tier call instead of a grounded one — no passages in the prompt, under the same limiter and deadline (§15.2).)*
+
 A full evaluation is 10 questions × 3 attempts (30) + a 15+ question retrieval bank + the adversarial suite ≈ **60+ model calls**. At ~1.5 req/min that is **40+ minutes of wall-clock throttling per eval run**, and the 200,000 tokens/day ceiling leaves only ~40 requests of headroom beyond it.
 
 **Mitigations, in order:**
@@ -1018,7 +1054,7 @@ A full evaluation is 10 questions × 3 attempts (30) + a 15+ question retrieval 
 2. **Trim history harder when chunks are present.** 8 turns plus 5 chunks is redundant; retrieval supplies grounding that history was partly serving. Lower `MAX_HISTORY_TURNS` for grounded calls.
 3. **Send only chunk text and minimal provenance** — section, publisher, `chunkId`. Not the whole document record.
 4. **Keep `max_tokens` at 700.** Already low for this reason; the ~150-word target makes it sufficient.
-5. **Cache query embeddings.** Doesn't help the Groq budget, but keeps the embedding bill flat across repeated eval runs.
+5. **Cache query embeddings.** Doesn't help the Groq budget, but keeps the embedding bill flat across repeated eval runs. *(Not needed as built: embedding is local and free — §9.2.)*
 6. **Consider a higher Groq tier before the evaluation phase.** The cheapest fix for a throughput wall is often not an architectural one — and far better identified now than 20 minutes into a 40-minute eval.
 
 **Implementation requirement.** The rate limiter must count retrieved-chunk tokens. `estimateTokens` (`~text.length / 4`) runs on the composed prompt, so this works **provided retrieval happens before the reservation** — which the §11 step order preserves. Reversing those two steps would make the limiter systematically under-count by ~2,500 tokens per request.
@@ -1045,6 +1081,23 @@ Because the triggers are asymmetric, there is **always** a window where one host
 
 So the old `Claim.source` column stays in place through the Milestone 2 release and is dropped afterwards. This is the one place a backwards-compatibility step is genuinely justified rather than avoided: two hosts really do read one database at different code versions.
 
+> **As built:** `RetrievalRecord` was never created, and `Claim.source` was kept (it holds the JSON citation — §21.3). The hosts are **not** interchangeable: retrieval embeds the query with bge-small, which loads in Railway's long-running container but not in a Vercel serverless function (even after int8 quantisation). So Vercel serves the UI and its route handler forwards `/api/chat` to Railway when `BACKEND_API_URL` is set, passing `cookie` through and returning `set-cookie` so conversation ownership survives the hop. Railway runs `npm start` = `next start -H 0.0.0.0`; Next reads `PORT` itself. The earlier `-p ${PORT:-3000}` form was removed because npm on Windows does not expand it and the server refused to start. Railway builds with Railpack, never a Dockerfile. See [deployment-plan.md](deployment-plan.md) §9.
+
+### 27.1 Local Docker stack (development only) `[BUILT]`
+
+Production does not use Docker. For a self-contained local run there is `Dockerfile.dev` + `docker-compose.yml` + `.dockerignore`, **verified end to end on 2026-10-04**: all 5 migrations apply to an empty database, the `ingest` service loads 7 documents / 226 chunks / 226 embedded with 0 warnings, the app answers with citations, and the production database was unchanged before and after.
+
+```bash
+docker compose up --build                          # app on http://localhost:3000, pgvector db on host port 5433
+docker compose --profile ingest run --rm ingest    # first run only: load the corpus into the empty local db
+```
+
+Three rules keep it safe:
+
+- **The file is `Dockerfile.dev`, never `Dockerfile`.** Railway auto-builds any root-level `Dockerfile` instead of using Railpack, so naming it `Dockerfile` would change how production builds.
+- **Every service overrides `DATABASE_URL`** (to the local `db` service) and blanks `BACKEND_API_URL` in its `environment` block. `.env.local` holds the *production* database URL and is read only for the Groq key; `environment` always wins over `env_file`. Removing those overrides would make a local run write to production.
+- **`.dockerignore` keeps every `.env*` file out of the image** (only the public `.env.local.example` template is allowed), so no secret is baked into a layer.
+
 ## 28. Failure modes
 
 | Failure | Mitigation | Status |
@@ -1055,31 +1108,46 @@ So the old `Claim.source` column stays in place through the Milestone 2 release 
 | Tokens-per-minute exhausted | Limiter blocks under a 7,000 tok/min margin; Groq's 429 is the real enforcement | `[BUILT]` |
 | Limiter state lost (restart, second serverless instance) | Accepted — process-local best-effort by design | `[BUILT]` |
 | Restricted request slips past the pre-call regex | `checkResponse` discards the answer, substitutes `REFUSAL_MESSAGE` | `[BUILT]` |
-| Fabricated citation | M1: `source` forced `null`. M2: `bindCitations` drops any claim whose `chunkId` wasn't retrieved this request | `[BUILT]`→`[TO BUILD]` |
-| Numbers drift between identical runs | M1: measured, 4 instances. M2: numbers must come from a retrieved chunk | `[BUILT]`→`[TO BUILD]` |
-| **Embedding provider down** | **Hard-fail.** Never fall back to ungrounded knowledge — that fallback must not exist | `[TO BUILD]` |
-| **Weak chunks, model answers anyway** | Sufficiency gate refuses before the model is called | `[TO BUILD]` |
-| **Near-miss: right topic, wrong scope** | Section metadata in context + prompt + explicit test. **Known weakest point** (§15.1) | `[TO BUILD]` |
-| **Corpus contains calorie/per-kg targets** | `restricted` flag + prompt + post-call guard + dedicated test (§25) | `[TO BUILD]` |
-| **Citation right, claim misreads it** | Not solvable in code. Manual spot-check of 10 answers (§18.1) | `[TO BUILD]` |
-| **Document silently changes at its URL** | `Document.checksum`; re-ingestion detects drift | `[TO BUILD]` |
-| **Wrong edition ingested** (hit 2 of 11 candidates) | `expectTitleContains` / `expectYearIn` abort ingestion (§5.4) | `[TO BUILD]` |
-| **Document extracts as word-salad** (hit the Eatwell plate) | Words-per-page gate; flag and use prose pages only (§7) | `[TO BUILD]` |
-| **Publisher blocks fetches** (hit 4 URLs, 403) | `acquisition: "manual"` + committed file + checksum (§6) | `[TO BUILD]` |
-| **Stale chunks after a config change** | `Chunk.configHash` vs current config hash — queryable, not remembered | `[TO BUILD]` |
+| Fabricated citation | M1: `source` forced `null`. M2: `bindCitations` drops any claim whose `chunkId` wasn't retrieved this request. General tier: `claims` always `[]` | `[BUILT]` |
+| Numbers drift between identical runs | M1: measured, 4 instances. M2: numbers must come from a retrieved chunk | `[BUILT]` |
+| **Embedding provider down** | **Hard-fail (503).** Never fall back to ungrounded knowledge — that fallback must not exist. The general tier is *not* such a fallback: it runs only when retrieval succeeded and the gate judged the passages insufficient (§15.2) | `[BUILT]` |
+| **Weak chunks, model answers anyway** | Sufficiency gate stops a grounded answer before the model is called; since 2026-10-06 the question goes to the labelled, uncited general tier (or is refused in filtered mode) | `[BUILT]` |
+| **Near-miss: right topic, wrong scope** | Section metadata in context + prompt + explicit test. **Known weakest point** (§15.1) | `[BUILT]` |
+| **Corpus contains calorie/per-kg targets** | Pre- and post-call scope guard + prompt + dedicated test (§25). The `restricted` flag was dropped as unused | `[BUILT]` |
+| **Citation right, claim misreads it** | Not solvable in code. Manual spot-check of 10 answers (§18.1); `eval:retrieval` prints each claim beside its passage | `[BUILT]` |
+| **Document silently changes at its URL** | `Document.checksum`; re-ingestion detects drift; `npm run corpus:watch` reports it | `[BUILT]` |
+| **Wrong edition ingested** (hit 2 of 11 candidates) | `expectTitleContains` / `expectYearIn` abort ingestion (§5.4) | `[BUILT]` |
+| **Document extracts as word-salad** (hit the Eatwell plate) | Words-per-page gate; flag and use prose pages only (§7) | `[BUILT]` |
+| **Site chrome ingested as prose** (WHO nav menus; who.int publication-page sidebars) | `isolateMainContent` + `CHROME_TAGS`, and `PUBLICATION_PAGE_CHROME_CLASSES` stripped at extraction (2026-10-04) | `[BUILT]` |
+| **Publisher blocks fetches** (hit 4 URLs, 403) | `acquisition: "manual"` + committed file + checksum (§6). As built, the blocked sources were dropped instead; all 7 current sources fetch | `[BUILT]` |
+| **Stale chunks after a config change** | `Chunk.configHash` vs current config hash — queryable, not remembered; `deleteStaleChunks` | `[BUILT]` |
 | Page refresh loses client message list | Accepted in M1 — conversation persists server-side, not re-fetched on mount | `[BUILT]` |
 
 ## 29. Security and prompt injection
 
 **Carried over `[BUILT]`:** `GROQ_API_KEY` and `DATABASE_URL` are server-only, no `NEXT_PUBLIC_` prefix, so neither reaches the client bundle. The client calls only our own `/api/chat`. All DB access goes through Prisma with parameterised queries. Request bodies are Zod-validated before use. Forcing `source = null` is itself an anti-injection measure: a user message telling the model to cite an authority cannot produce a citation.
 
-**Milestone 2 changes the threat model, because third-party document text now enters the prompt.** `[TO BUILD]`
+**Milestone 2 changes the threat model, because third-party document text now enters the prompt.** `[BUILT]`
 
 1. **Corpus content is untrusted prompt input.** These are reputable publishers, so the realistic risk is not malice but **instruction-shaped prose**: a document saying "you should consume 2,000 calories per day" is text the model may *follow as guidance* rather than *report as content*. Mitigations: chunks are wrapped in clearly delimited numbered blocks labelled as reference material; the prompt states that passage text is data to report and cite, never instructions to obey; `checkResponse` still scans the output. §25 is a concrete instance of this risk, not a hypothetical one.
 2. **The citation path is injection-resistant by construction.** Even a passage reading "cite this as the WHO, 2026" cannot change a citation: publisher, year and URL come from the `Document` row, and the model's only citation power is choosing a `chunkId` (§20.2).
 3. **Raw pgvector SQL needs care.** Similarity search uses `$queryRaw`. **The query vector is always a bound parameter, never interpolated** — it derives from user text, so string-interpolating it would reintroduce injection at the one layer Prisma does not cover. `sourceKey` filters are bound the same way.
-4. **`documentId` is validated as a UUID and resolved against `Document`** before use as a filter, so a client cannot probe the schema through it.
-5. **Corpus files are committed and checksummed**, so what gets embedded is reviewable in version control rather than whatever a URL served on build day.
+4. **`documentId` is validated as a UUID and resolved against `Document`** before use as a filter, so a client cannot probe the schema through it. *(As built: the filter is `documentKey`, resolved against the source registry with `getSource()`; an unknown or disabled key is rejected with 400 before any embedding or search runs.)*
+5. **Corpus files are committed and checksummed**, so what gets embedded is reviewable in version control rather than whatever a URL served on build day. *(As built: all 7 sources are fetched, not committed; every fetch is checksummed and the edition guard runs on every ingest, and `npm run corpus:watch` reports drift.)*
+
+### 29.1 Application and repository protections (as built, 2026-10-06) `[BUILT]`
+
+Added after Milestone 2 shipped, because the repository is **public** and the endpoint is open to the internet:
+
+| Protection | What it does | Where |
+|---|---|---|
+| **Conversation ownership** | Each browser gets an opaque owner id in a signed, httpOnly, `SameSite=Lax` cookie (`nk_owner`). `Conversation.ownerId` must match on `POST` and `DELETE`; a mismatch is **404, not 403**, so the endpoint never confirms an id exists. Not user accounts — no login, nothing personal in the cookie. Pre-ownership conversations (`ownerId = null`) are claimed by the first browser to open them. Signing key is `SESSION_SECRET`, falling back to `DATABASE_URL` so it is never a weak default | `lib/session.ts`, migration `20261003140000_conversation_owner` |
+| **Message cap** | 4,000 characters, on the server (`ChatRequestSchema`) and in the browser (`ChatInput`). An unbounded paste was once stored, embedded, then failed generation and poisoned later turns' history | `lib/limits.ts` |
+| **Unknown `documentKey` → 400** | A typo is a bad request, not a reported coverage gap | `app/api/chat/route.ts` |
+| **`GET /api/chat` health** | Reports database and corpus counts and whether `GROQ_API_KEY` is configured — never any part of its value | `app/api/chat/route.ts` |
+| **Secrets only in `.env.local`** | Gitignored. `.env.local.example` is public and holds placeholders only (a key was once pasted into it, which is why the two controls below exist) | repo root |
+| **GitHub secret scanning + push protection** | Enabled on the repository; rejects pushes containing recognised keys | GitHub settings |
+| **Local pre-commit hook** | Blocks commits adding a `gsk_` Groq key or a database URL with a password. Local only (`.git/hooks` is not pushed); push protection is the backstop | `.git/hooks/pre-commit` |
 
 ---
 ---
@@ -1098,7 +1166,9 @@ No API, no model call. `checkRequest` directly against: the 12 restricted phrasi
 
 10 fixed questions × 3 attempts, each in a **fresh conversation** (isolates model variance from context effects). Detects `numeric_drift` (compares the *set* of numbers as floats, so `"70"` and `"70.0"` match), `broken_source`, `unhelpful_hedging`. Plus an 8-case scope-abuse suite — `numeric_target` and `medical_advice` × direct / rephrased / indirect / post-unrelated — asserting an **exact match** against `REFUSAL_MESSAGE` with zero claims. `post_unrelated` cases also assert both turns share a `conversationId`, confirming the test exercises cross-turn memory rather than accidentally starting a fresh conversation.
 
-### 30.3 `npm run eval:retrieval` — retrieval quality `[TO BUILD]`
+### 30.3 `npm run eval:retrieval` — retrieval quality `[BUILT]`
+
+*(As built: calls `retrieve()` directly, no server needed. Latest report, generated 2026-10-04 over 17 questions: `recall@5` 17/17, `document_recall@5` 17/17, 0 false refusals, adversarial 8/8, 0 of 13 claims dropped. The adversarial `not_in_corpus` cases assert `retrieve().sufficient === false` — the gate's decision — so they are unaffected by the 2026-10-06 general tier, which changes only what the route replies after the gate fails.)*
 
 **A separate script, deliberately.** A wrong answer can come from bad retrieval or bad generation, and the fix differs. A blended score hides which occurred.
 
@@ -1114,28 +1184,34 @@ Input: `data/retrieval-questions.json` — 15+ questions, each with the document
 
 **Adversarial suite**, reported split by refusal type so a correct refusal for the *wrong reason* is visible:
 
-- **not-covered** — absent topic ⇒ `NOT_IN_CORPUS`, naming what was searched.
+- **not-covered** — absent topic ⇒ `NOT_IN_CORPUS`, naming what was searched. *(Since 2026-10-06 the live route answers these from the general tier in all-documents mode; the suite still checks the gate's `sufficient: false`.)*
 - **near-miss** — phrasing matching a nearly-correct section ⇒ refusal, not an answer from the wrong scope. Construct from the recorded corpus boundary (§15.1 — *not* children).
 - **out-of-scope** — calorie target and medical advice, each direct / rephrased / indirect / raised-again-later ⇒ out-of-scope refusal, **not** `NOT_IN_CORPUS`.
 - **corpus-restricted** (new) — a protein target, where a citable chunk *would* answer ⇒ out-of-scope refusal regardless (§25).
 
 Writes `Docs/retrieval-report.md`.
 
-### 30.4 Manual citation spot-check — 10 answers `[TO BUILD]`
+### 30.4 Manual citation spot-check — 10 answers `[BUILT]`
+
+*(As built: `eval:retrieval` generates 10 answers and prints each claim beside its cited passage in `Docs/retrieval-report.md` (13 claims on 2026-10-04); the checking itself stays manual.)*
 
 Open the chunk each answer cited; confirm **every number and named recommendation is actually in there**.
 
 **By hand, deliberately.** This is the one measurement that cannot be automated against the same embeddings that produced the retrieval — a retrieval bug and its automated check would share the failure. Report per-claim *and* per-answer accuracy: one bad claim in an otherwise good answer is still a shipped unsupported claim.
 
-### 30.5 Milestone 1 → 2 regression comparison `[TO BUILD]`
+### 30.5 Milestone 1 → 2 regression comparison `[BUILT]`
+
+*(As built: `Docs/retrieval-report.md` reports the M1 `numeric_drift` baseline — on 2026-10-04: 4 at baseline, 0 still drifting, 1 fixed, 3 not measured.)*
 
 Same 10 questions, compared against the `eabb1ca8b1` baseline:
 
 - **`numeric_drift` should approach zero.** A number that must appear in a retrieved chunk cannot drift. **4 → 0 is the target**, and it is the clearest predicted win.
-- **`no_clear_answer` questions change character.** "Is quinoa a superfood", "what is the single best diet" produced hedging in M1; in M2 they should produce either cited population-level guidance or a not-in-corpus refusal. Report which.
-- **Report regressions too.** A question M1 answered well and M2 refuses is a real cost of grounding, not a detail to omit. Expect some — the corpus is 5–7 documents and the model's parametric knowledge is vastly broader.
+- **`no_clear_answer` questions change character.** "Is quinoa a superfood", "what is the single best diet" produced hedging in M1; in M2 they should produce either cited population-level guidance or a not-in-corpus refusal. Report which. *(Since 2026-10-06: cited guidance or a labelled general answer.)*
+- **Report regressions too.** A question M1 answered well and M2 refuses is a real cost of grounding, not a detail to omit. Expect some — the corpus is 5–7 documents and the model's parametric knowledge is vastly broader. *(The 2026-10-06 general tier recovers most of these as labelled, uncited answers; the loss is now citations, not answers.)*
 
-### 30.6 Config versioning `[TO BUILD]`
+### 30.6 Config versioning `[BUILT]`
+
+*(As built: `RETRIEVAL_CONFIG_HASH` — currently `b63742d51a` — is stored on every `Chunk` and reported in each response's `retrieval.configVersion` and in the retrieval report. `EvalRun` stores `promptVersion` only.)*
 
 `EvalRun.promptVersion` makes prompt changes comparable. Retrieval needs the same discipline, because changing `k` or the embedding model changes results as surely as changing the prompt.
 
@@ -1149,6 +1225,8 @@ Same 10 questions, compared against the `eabb1ca8b1` baseline:
 ## 31. Open decisions
 
 To be resolved and recorded in `corpus/README.md` **before** the question bank runs, since each changes the measured results. This is the README list the problem statement requires.
+
+> **As built (all resolved):** 1 — the seven in §5.3, all fetched (the 403-blocked sources were dropped, not hand-acquired). 2 — 500 / 900 / 80. 4 — `bge-small-en-v1.5`, 384, int8. 5 — `k` = 5. 6 — **HNSW cosine** was built after all (§4, §41). 7 — `absoluteFloor` 0.50 / `relevanceFloor` 0.55. 8 — the `restricted` flag was dropped as unused; the scope guard enforces the policy (§25). 10 — API + eval only. The values live in `lib/retrievalConfig.ts` (hash `b63742d51a`), not a `corpus/README.md`.
 
 | # | Decision | Leaning | Blocked on |
 |---|---|---|---|
@@ -1169,17 +1247,21 @@ Decisions whose *reasons* are not recoverable from the code. Newest first.
 
 | Decision | Reason | § |
 |---|---|---|
+| General-knowledge tier when the gate fails in all-documents mode (2026-10-06) | The owner extended scope to any food question worldwide. Uncovered answers carry no claims (any citation would be fabricated) and are labelled via `answerMode` and a UI badge; filtered mode keeps the not-in-corpus refusal | 15.2 |
+| Docker image file named `Dockerfile.dev`, never `Dockerfile` (2026-10-04) | Railway auto-builds any root `Dockerfile` instead of Railpack, which would silently change how production builds | 27.1 |
+| Signed `nk_owner` cookie for conversation ownership; 404 on mismatch | Anyone holding a conversation UUID could read or extend it. A 404 never confirms an id exists | 29.1 |
+| Drop `Chunk.restricted` (2026-10-03) | Computed but never read — it looked like protection that did not exist. The scope guard enforces the policy | 25 |
 | Citation is an object, not a URL string — superseding the comment in `lib/schema.ts` | A URL cannot carry document, publisher and year, all required on every claim | 20.1 |
 | Model emits `chunkId` only; the server builds the citation | If the model could emit publisher/year, it could emit them wrongly — a fabricated citation that validates | 20.2 |
 | `Claim.chunkId` FK instead of JSON or scalar citation columns | Referential integrity *is* the no-fabrication guarantee at the storage layer | 21.3 |
-| Sufficiency gate before generation, not after | Given weak chunks, a capable model writes a confident wrong answer. Gating earlier turns it into a refusal | 15 |
+| Sufficiency gate before generation, not after | Given weak chunks, a capable model writes a confident wrong answer. Gating earlier turns it into a refusal (since 2026-10-06, a labelled general answer in all-documents mode) | 15 |
 | Out-of-scope guard before retrieval | A calorie request must be refused on policy, not reported as a coverage gap — otherwise retrieval metrics are corrupted | 23 |
 | Include DGA 2025–2030 despite its calorie and per-kg targets | It is the current official US guidance; a corpus curated to avoid awkward content is not a corpus of official guidance | 25 |
 | No fallback when embedding fails | A fallback to model knowledge would silently return exactly the ungrounded answers this milestone eliminates | 13 |
 | pgvector, after removing Chroma Cloud | Chroma Cloud's availability was outside our control and an outage took ingest down with it; it also cost a third provider and a third credential. pgvector keeps vectors beside the provenance a citation is built from | 4, 41 |
-| Exact vector search, no ANN index | A few thousand chunks scan fast and exactly; ANN trades away the recall being measured | 4 |
+| Exact vector search, no ANN index | A few thousand chunks scan fast and exactly; ANN trades away the recall being measured. *(Superseded as built: an HNSW cosine index exists; at 226 chunks it does not measurably affect recall — §41)* | 4 |
 | Plain TypeScript, no LangChain | `bindCitations` is the most important code in the system and must be auditable at a glance | 4 |
-| Corpus PDFs committed to the repo | Four publishers hard-block programmatic fetches (verified 403). Committing makes ingestion reproducible and removes bot policy from the build path | 6 |
+| Corpus PDFs committed to the repo | Four publishers hard-block programmatic fetches (verified 403). Committing makes ingestion reproducible and removes bot policy from the build path. *(Not needed as built: the blocked sources were dropped; all 7 current sources fetch)* | 6 |
 | Filter in SQL `WHERE`, not post-filter | Post-filtering returns <`k` chunks exactly when the named document isn't already in the global top-`k` — i.e. when filtered retrieval matters | 14.3 |
 | Keep `Claim.source` through the M2 release | Two hosts with asymmetric deploy triggers read one database at different code versions; additive-only is the only safe migration shape | 27 |
 | Retrieval before the rate-limit reservation | Otherwise the limiter under-counts by ~2,500 tokens per request | 26 |
@@ -1188,7 +1270,7 @@ Decisions whose *reasons* are not recoverable from the code. Newest first.
 | `temperature: 0.2`, not 0 | Low enough to reduce drift, nonzero so run-to-run variance stays visible to evaluation instead of hidden | 17 |
 | "Answer only what was asked" in the prompt | Without it, the 3× repeats sometimes included pregnancy/athlete/per-bodyweight asides and sometimes didn't, making drift unmeasurable | 16 |
 | Postgres for local dev too, not SQLite | Vercel's filesystem is ephemeral; one database avoids a dev/prod schema divergence | 21.1 |
-| Deploy to Vercel *and* Railway | Proves no platform coupling; surfaced the port-binding requirement a single-target deploy would have hidden | 27 |
+| Deploy to Vercel *and* Railway | Proves no platform coupling; surfaced the port-binding requirement a single-target deploy would have hidden. *(As built, M2: the hosts now have different jobs — Vercel serves the UI and forwards `/api/chat` to Railway, because local embedding cannot load in serverless)* | 27 |
 | Log `missed_refusal` even when the guard caught it | Near-misses the guard handled are signal about prompt quality; counting only leaks would hide a degrading prompt | 30.2 |
 
 ## 33. Milestone 3 boundary
@@ -1199,8 +1281,8 @@ Recorded to keep the line clear while Milestone 2 is built.
 |---|---|---|
 | Per-food nutrient numbers | **Deliberately not in the corpus** — prose guidance only | A structured food/nutrient database with its own provenance. "Iron in 100 g of spinach" is a lookup, not retrieval |
 | `Citation` shape | document / publisher / year / url / section / page | Widens to express structured-data provenance (dataset, version, record id) — a union, not a reshape |
-| Retrieval interface | `search(query, {k, documentId})` over chunks | A router choosing between prose retrieval and structured lookup. Some questions need both |
-| Scope control | Three layers + `restricted` chunk flag | **More** load-bearing, not less: structured nutrient data makes calorie arithmetic trivial, so code-level refusal of calorie and weight targets matters more |
+| Retrieval interface | `search(query, {k, documentId})` over chunks (as built: `retrieve(question, {k, documentKey})`) | A router choosing between prose retrieval and structured lookup. Some questions need both |
+| Scope control | Three layers (the `restricted` chunk flag was dropped as unused, §25) | **More** load-bearing, not less: structured nutrient data makes calorie arithmetic trivial, so code-level refusal of calorie and weight targets matters more |
 | Sources panel | Cited chunks grouped by document | Must also render structured-data provenance, which looks nothing like a document citation |
 
 Why prose and structured data stay separate: a nutrient table pulled into a prose corpus produces exactly the number-shaped claim that chunking damages and citation cannot repair. The split is a design decision, not a scheduling accident.
@@ -1378,6 +1460,8 @@ The problem statement requires naming the cost, not just the choice:
 
 Runs over every chunk before embedding, and sets `restricted: true`.
 
+> **As built:** this stage was implemented and then **removed on 2026-10-03** (migration `20261003160000_drop_chunk_restricted`). Nothing downstream ever read the flag — retrieval filtered only on `kind` and the route never consulted it — so it read as protection that did not exist. The policy is enforced by `lib/scopeGuard.ts` before retrieval and again on every generated answer (§25). The analysis below is kept because the corpus content it describes is real.
+
 This exists because **the corpus itself contains the material the assistant must refuse**:
 
 | Source | Restricted content found |
@@ -1407,7 +1491,7 @@ Groq serves generation only and exposes no embeddings endpoint, so this is a **s
 
 | Option | Dim | Verdict |
 |---|---|---|
-| **Local `bge-small-en-v1.5` via ONNX** | **384** | **CHOSEN and built.** No credential, no runtime third party, no per-call cost. The full 232-chunk corpus embeds in well under a minute on CPU, and the model loads in ~10s |
+| **Local `bge-small-en-v1.5` via ONNX** | **384** | **CHOSEN and built.** No credential, no runtime third party, no per-call cost. The full corpus (226 chunks as of 2026-10-04; 232 at first ingest) embeds in well under a minute on CPU, and the model loads in ~10s |
 | OpenAI `text-embedding-3-small` | 1536 | Rejected: a second paid provider and a new runtime failure domain, for a corpus small enough that the network round trip is the dominant cost |
 | Cohere `embed-english-v3.0` | 1024 | Rejected: same objection, plus another vendor relationship |
 
@@ -1424,7 +1508,7 @@ Groq serves generation only and exposes no embeddings endpoint, so this is a **s
 | **Corpus** | ~300–400 chunks, once per corpus change | **Offline**, in `npm run ingest` |
 | **Query** | 1 short string | **Per request**, cached by normalised query hash |
 
-Corpus embedding is a one-off cost of a few hundred calls. Only the query is embedded in the request path, and caching matters more than it looks: the retrieval evaluation asks the same 15+ questions repeatedly, and without a cache that dominates the embedding bill.
+Corpus embedding is a one-off cost of a few hundred calls. Only the query is embedded in the request path, and caching matters more than it looks: the retrieval evaluation asks the same 15+ questions repeatedly, and without a cache that dominates the embedding bill. *(As built: the corpus is 226 chunks, and there is no per-query cache — with a local model there is no embedding bill, so only the loaded model is kept in memory.)*
 
 ### Three operational rules
 
@@ -1451,7 +1535,7 @@ The prefix is embedded but **not** counted as chunk text for citation purposes �
 
 **pgvector, in the Postgres both deployments already share.** A file-based index (FAISS, Chroma-on-disk) cannot survive Vercel's ephemeral filesystem — the same constraint that forced Postgres over SQLite in Milestone 1. pgvector was the earlier plan; Chroma Cloud was tried and removed after an outage took the ingest pipeline down with it.
 
-**HNSW with cosine distance**, created once by `ensureVectorSchema()`. At 232 chunks the index barely affects recall; it matters above ~50k.
+**HNSW with cosine distance**, created once by `ensureVectorSchema()`. At 226 chunks (232 at first ingest) the index barely affects recall; it matters above ~50k.
 
 **How the data actually gets into pgvector:**
 
@@ -1534,6 +1618,8 @@ export const RETRIEVAL_CONFIG = {
 } as const;
 ```
 
+*(As built: calibrated to `absoluteFloor: 0.50` and `relevanceFloor: 0.55`; the object also carries `sourceDiversityMargin: 0.03`. Current hash `b63742d51a`. `lib/retrievalConfig.ts` is authoritative.)*
+
 Why this matters: changing `k` or the embedding model changes results as surely as changing the prompt. Milestone 1 already versions the prompt (`sha256(SYSTEM_PROMPT)`, now `sha256(SYSTEM_PROMPT_RAG)`); retrieval gets the same discipline. A chunk whose `configHash` differs from the current config is **stale and must be re-ingested** — and that mismatch is detectable with a query rather than by memory.
 
 ---
@@ -1555,6 +1641,7 @@ corpus/manifest.json + lib/corpus/sources.ts
   [6] SECTION      outline -> numbered -> typographic -> inherit   (§37)
   [7] CHUNK        heading-aware, 500/900/80, tables whole     (§38)
   [8] POLICY       flag calorie / per-kg chunks as restricted  (§39)
+                   (removed 2026-10-03; enforced by the scope guard)
   [9] EMBED        local bge-small (ONNX, q8) -> vector(384)  (§40)
  [10] UPSERT       Document + Chunk, keyed by
                    (name, year, edition) + configHash

@@ -4,6 +4,8 @@ Covers deploying the current app (Next.js frontend + `/api/chat` backend, Groq L
 
 Corresponds to implementation-plan.md Phase 10, expanded into concrete steps for two targets.
 
+> **Status as of 2026-10-06:** this is the record of the original Milestone 1 deployment, kept as written. Since then: Milestone 2 (retrieval with citations) and a labelled general-knowledge tier are live; the hosts are no longer interchangeable (Vercel serves the UI and forwards `/api/chat` to the Railway container via `BACKEND_API_URL`, because the local bge-small embedding model cannot load in a serverless function); `npm start` is now `next start -H 0.0.0.0` (see the §9 note); `GET /api/chat` is the health check; and the local Docker stack is `Dockerfile.dev` + `docker-compose.yml`. For the current state see [deployment-plan-v2.md](deployment-plan-v2.md) and `CLAUDE.md`.
+
 ---
 
 ## 1. Current State (as of writing this plan)
@@ -152,7 +154,7 @@ If only one is actually needed going forward, decommission the other via its das
 ## 8. What This Plan Deliberately Does Not Cover
 
 - **Rate limiting the public endpoint itself** (distinct from the Groq-facing limiter already in `lib/rateLimiter.ts`) — flagged as an open gap in `Docs/edge-cases.md`; worth adding before wide public sharing of either URL, not required to complete the Milestone 1 deliverable.
-- **A health-check endpoint** (`GET /api/health`) to verify env vars post-deploy — also flagged as a gap; recommended as a fast follow, not a hard blocker for the first deploy.
+- **A health-check endpoint** (`GET /api/health`) to verify env vars post-deploy — also flagged as a gap; recommended as a fast follow, not a hard blocker for the first deploy. *(Since built as `GET /api/chat`: API, database and corpus counts, and whether `GROQ_API_KEY` is configured, never its value.)*
 - **CI-driven migrations** — this plan runs `prisma migrate deploy` manually once; wiring it into a GitHub Action is a reasonable next step once the deployment is stable, not part of the initial deploy.
 
 ---
@@ -164,6 +166,6 @@ If only one is actually needed going forward, decommission the other via its das
 - **Stray seed table**: the freshly provisioned Railway Postgres template came with a pre-seeded placeholder table (`xyz`, a single `id` column, no data) — this caused `prisma migrate deploy`'s P3005 "database schema is not empty" error. Dropped manually (`DROP TABLE IF EXISTS "xyz"`) before migrating, since it wasn't part of any real schema.
 - **`migrate dev` doesn't work non-interactively**: since there was no existing Postgres migration (the SQLite one was removed — see §2), the first migration had to be generated some other way. `prisma migrate dev` refuses to run in a non-interactive shell. Worked around with `prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` to generate the SQL directly, then applied it with `prisma migrate deploy` (after manually creating `migration_lock.toml` with `provider = "postgresql"`).
 - **Railway port binding — two separate bugs, not one**: Railway deployments 502'd twice before working:
-  1. `next start` defaults to binding only `localhost`, not all interfaces — fixed with `next start -H 0.0.0.0 -p ${PORT:-3000}` in `package.json`'s `start` script (this has no effect on Vercel, which never runs this script).
+  1. `next start` defaults to binding only `localhost`, not all interfaces — fixed with `next start -H 0.0.0.0 -p ${PORT:-3000}` in `package.json`'s `start` script (this has no effect on Vercel, which never runs this script). *(Later changed to plain `next start -H 0.0.0.0`: Next reads `PORT` itself, and npm on Windows does not run scripts through a POSIX shell, so the literal `${PORT:-3000}` was passed and the server refused to start. Do not reintroduce `-p`.)*
   2. Even after that fix, the domain still 502'd — `railway domain --port 3000` had set the wrong target port. Railway injects its own dynamic `PORT` (in this case `8080`), and the domain's configured `targetPort` must match it exactly, or the proxy connects to a port nothing is listening on. Fixed with `railway domain update <domain> --port 8080`. **Takeaway: whatever port the app logs it's listening on at runtime is the port the domain must target — don't assume it matches whatever port you specified when first creating the domain.**
 - **Vercel↔GitHub auto-deploy not connected**: `vercel link`/`vercel git connect` both failed with "You need to add a Login Connection to your GitHub account first" — this is an account-level OAuth connection only doable via the Vercel dashboard UI, not scriptable via CLI. Deploys are done directly via `vercel --prod` (uploads and builds local code) instead of git-push-triggered deploys. Connecting GitHub in the dashboard later would enable auto-deploy without any code changes.
