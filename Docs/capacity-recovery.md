@@ -13,7 +13,7 @@ The reported screenshot showed `how many eggs to eat a day` ending in a capacity
 
 ## Validation before deployment
 
-- 40 independent server regressions passed, including retry cache recovery, real-history isolation, concurrent duplicate generation, ownership, shared deadlines, quota settlement and existing error/citation/refusal checks.
+- 41 independent server regressions passed, including retry cache recovery, real-history isolation, earlier failed-question preferences/allergy context, concurrent duplicate generation, ownership, shared deadlines, quota settlement and existing error/citation/refusal checks.
 - 13 fake-clock browser retry checks passed, including countdown timing, returned conversation IDs, bounded retries, HTTP-date hints, daily limits, provider/auth failures and ownership recovery.
 - Scope guard: 78 checks passed. Existing rate-limiter and corpus-watcher checks passed. TypeScript, lint and the production build passed.
 - Controlled browser smoke used the rebuilt app through a temporary local test proxy. Its first response was a simulated 15-second capacity failure; the UI displayed the countdown, retried automatically, and then obtained an actual HTTP 200 general-answer response for the exact eggs wording. Browser console errors were empty. The test proxy is outside the repository and is not deployed; its test conversation was cleaned up.
@@ -21,7 +21,16 @@ The reported screenshot showed `how many eggs to eat a day` ending in a capacity
 
 ## Production verification
 
-Pending deployment of this change. The previous release's audit remains historical evidence, not verification of this release.
+- Source release: `7d9a6c0`, including `cd0ea9c`, pushed to GitHub `master`.
+- Railway deployment: `f9507551-c031-498a-8564-01132215605b`, `SUCCESS`, built explicitly from the final source.
+- Vercel deployment: `dpl_GQEgyKKGu29Ruj6VPdrrFWohWPwH`, `READY`, production alias [ai-nutrition-assistant-self.vercel.app](https://ai-nutrition-assistant-self.vercel.app).
+- Five focused production verification checks passed: both hosts healthy; exact screenshot question answered; equivalent wording cached; non-owner continuation refused with 404; unrelated programming request refused.
+- The exact question `how many eggs to eat a day` returned HTTP 200, general mode with no claims, in 3.75 seconds. `HOW MANY EGGS TO EAT PER DAY?!` reused that answer with `cached: true` in 0.64 seconds.
+- Actual production browser smoke after reloading the new frontend displayed the exact question's substantive answer and general-knowledge/no-citations label; console error logs were empty.
+- Both endpoints retained the unchanged corpus (7 documents / 226 chunks / 226 embedded) and prompt hash `c23893d721ab`. Prompts did not change, so the hash alone does not identify this capacity release; deployment IDs and new frontend behavior were also verified.
+- Environment file hashes remained unchanged. Automated test conversations were cleaned up; the production browser demonstration is left open.
+
+Refresh existing browser tabs to load the new countdown/retry code. The previous guardrail audit remains a historical record; this document records the capacity fix and its current verification.
 
 ## Remaining limit
 
