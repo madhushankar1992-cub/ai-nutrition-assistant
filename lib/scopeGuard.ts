@@ -1,4 +1,5 @@
 export type ScopeCategory =
+  | "off_topic"
   | "numeric_target"
   | "personal_weight_recommendation"
   | "medical_advice";
@@ -16,6 +17,58 @@ export const REFUSAL_MESSAGE =
 // Deliberately code-level (not just prompt-level) enforcement. Kept as its
 // own module so the matching strategy (currently rules) can be swapped for
 // a classifier without touching route logic.
+
+// Reject explicit unrelated TASKS, including when a food word is used as
+// camouflage. This is intentionally not an English food-word allowlist: a
+// legitimate regional dish or non-English food question must still reach the
+// model. Ambiguous topics are also checked by both system prompts.
+const OFF_TOPIC_PATTERNS: RegExp[] = [
+  /\b(write|create|build|generate|debug|fix|implement|explain|describe|tell me|give me|show me)\b[^.?!]{0,100}\b(python|javascript|typescript|sql|html|css|script|software|algorithm|website|app|programming|regex|regular expression)\b/i,
+  /\b(write|create|generate|debug|implement)\b[^.?!]{0,70}\bcode\b/i,
+  /\b(write|create|generate|tell|compose|sing)\b[^.?!]{0,70}\b(poem|poetry|sonnet|joke|story|song|lyrics|novel|screenplay|love letter)\b/i,
+  /\b(translate|translation)\b/i,
+  /\b(capital|president|prime minister|election|weather forecast|stock price|stock market|cryptocurrency|bitcoin|football score|movie recommendation)\b/i,
+  /\b(recommend|suggest|best|good|watch)\b[^.?!]{0,50}\b(movie|film|tv show|video game)\b/i,
+  /\b(quantum (?:physics|entanglement|mechanics)|general relativity|astronomy|solar system)\b/i,
+  /\bwhat(?:'s| is)\b[^.?!]{0,40}\bweather\b/i,
+  /\b(solve|calculate|prove|differentiate|integrate)\b[^.?!]{0,70}\b(equation|quadratic|algebra|calculus|integral|derivative)\b/i,
+  /\b(ignore|disregard|override|forget)\b[^.?!]{0,60}\b(instructions|rules|system prompt|restrictions|guardrails|policy)\b/i,
+  /\b(reveal|print|repeat|show|expose)\b[^.?!]{0,50}\b(system prompt|hidden instructions|api key|secrets?)\b/i,
+  /\b(pretend|act as|you are now|roleplay)\b[^.?!]{0,70}\b(unrestricted|uncensored|developer mode|another assistant)\b/i,
+  // Common multilingual equivalents of explicit unrelated tasks. Do not use
+  // script/language detection to block questions about food in these languages.
+  /(?:राजधानी|प्रधानमंत्री|राष्ट्रपति|कविता|चुटकुला|पाइथन|जावास्क्रिप्ट|कोड लिख|पिछले निर्देश.*अनदेखा)/u,
+  /\b(capital de|presidente de|escribe|escribir)\b[^.?!]{0,60}\b(francia|poema|c[oó]digo|python|javascript)\b/i,
+  /(?:^|\s)(écris|ecris|écrire|ecrire)\b[^.?!]{0,60}\b(poème|poeme|code|python)\b/i,
+  /\b(capitale de|président de|president de)\b/i,
+];
+
+function normalizeRequest(text: string): string {
+  return text.normalize("NFKC").replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").toLowerCase();
+}
+
+function checkTopic(
+  history: { role: string; content: string }[],
+  message: string
+): ScopeCheckResult | undefined {
+  const direct = matchAny(OFF_TOPIC_PATTERNS, message);
+  if (direct.matched) {
+    return { allowed: false, category: "off_topic", matchedText: direct.matchedText };
+  }
+
+  // A terse continuation can inherit an unrelated request, but a fresh food
+  // question must not be poisoned by an earlier refusal.
+  if (/^\s*(?:please\s+)?(?:continue|go on|do it|do that|answer (?:it|that)|tell me more|try again|just this once|and then)[\s.!?]*$/i.test(message)) {
+    const previousUser = history.filter((turn) => turn.role === "user").slice(-1)[0];
+    if (previousUser) {
+      const previous = matchAny(OFF_TOPIC_PATTERNS, normalizeRequest(previousUser.content));
+      if (previous.matched) {
+        return { allowed: false, category: "off_topic", matchedText: previous.matchedText };
+      }
+    }
+  }
+  return undefined;
+}
 
 const NUMERIC_TARGET_PATTERNS: RegExp[] = [
   /\bhow many calories (should|do) i\b/i,
@@ -153,11 +206,15 @@ export function checkRequest(
   history: { role: string; content: string }[],
   newMessage: string
 ): ScopeCheckResult {
+  const message = normalizeRequest(newMessage);
+  const topic = checkTopic(history, message);
+  if (topic) return topic;
+
   const recentHistory = conversationalContext(history)
     .slice(-6)
     .map((m) => m.content)
     .join("\n");
-  const combined = `${recentHistory}\n${newMessage}`.toLowerCase();
+  const combined = normalizeRequest(`${recentHistory}\n${newMessage}`);
 
   const numeric = matchAny(NUMERIC_TARGET_PATTERNS, combined);
   if (numeric.matched) {
@@ -187,10 +244,12 @@ export function checkRequest(
  * when the pre-call request check passed.
  */
 export function checkResponse(answer: string): ScopeCheckResult {
-  const lower = answer.toLowerCase();
+  // Match semantics across line breaks, not just presentation on one line.
+  const lower = normalizeRequest(answer).replace(/\s+/g, " ");
 
   const numericLeak =
-    /\b\d{2,4}\s?(kcal|calories)\b.*\b(per day|daily|target|goal)\b/i.test(lower) ||
+    /\b\d{1,5}(?:[,.]\d+)?\s?(kcal|calories)\b.{0,100}\b(per day|daily|target|goal)\b/i.test(lower) ||
+    /\b(per day|daily|target|goal)\b.{0,100}\b\d{1,5}(?:[,.]\d+)?\s?(kcal|calories)\b/i.test(lower) ||
     /\byou should (eat|consume|aim for) (about |around )?\d/i.test(lower);
   if (numericLeak) {
     return { allowed: false, category: "numeric_target" };

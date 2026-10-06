@@ -34,7 +34,7 @@ const TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_ENTRIES = 500;
 const CORPUS_VERSION_TTL_MS = 5 * 60 * 1000;
 
-const PROMPT_VERSION = createHash("sha256")
+export const PROMPT_VERSION = createHash("sha256")
   .update(SYSTEM_PROMPT_RAG)
   .update("\u0000")
   .update(SYSTEM_PROMPT_GENERAL)

@@ -9,9 +9,10 @@ import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
 import { warmUp } from "@/lib/corpus/embeddings";
-import { getCachedAnswer, setCachedAnswer } from "@/lib/answerCache";
+import { getCachedAnswer, setCachedAnswer, PROMPT_VERSION } from "@/lib/answerCache";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
 import { getSource } from "@/lib/corpus/sources";
+import { generationError } from "@/lib/chatErrors";
 
 // Groq calls retry with backoff on rate limits, and a grounded request also
 // embeds the query and hits the vector store first. Hobby plan max is 60s.
@@ -46,8 +47,12 @@ async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResp
   const target = `${BACKEND_API_URL}/api/chat${req.nextUrl.search}`;
   const cookie = req.headers.get("cookie");
 
-  const upstream = await fetch(target, {
+  let upstream: Response;
+  let text: string;
+  try {
+    upstream = await fetch(target, {
     method: req.method,
+    signal: AbortSignal.timeout(55_000),
     // The owner cookie has to survive the hop in both directions, or the
     // backend mints a new owner on every request and no conversation is ever
     // readable twice.
@@ -58,12 +63,20 @@ async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResp
       ...(req.headers.get("x-cache-bypass") === "1" ? { "x-cache-bypass": "1" } : {}),
     },
     body,
-  });
+    });
+    text = await upstream.text();
+  } catch {
+    return NextResponse.json(
+      { answer: "The assistant is temporarily unavailable. Please try again shortly.", claims: [] },
+      { status: 503, headers: { "Retry-After": "60" } }
+    );
+  }
 
-  const text = await upstream.text();
   const headers = new Headers({ "Content-Type": "application/json" });
   const setCookie = upstream.headers.get("set-cookie");
   if (setCookie) headers.set("set-cookie", setCookie);
+  const retryAfter = upstream.headers.get("retry-after");
+  if (retryAfter) headers.set("retry-after", retryAfter);
 
   return new NextResponse(text, { status: upstream.status, headers });
 }
@@ -113,25 +126,17 @@ async function generationFailure(
   // it is untrue. It is reported as capacity, with a 503 the client can retry,
   // and logged under its own category so the failure log can tell a quota
   // problem from a model problem.
-  const message = err instanceof Error ? err.message : String(err);
-  const name = err instanceof Error ? err.name : "";
-  const status = (err as { status?: number } | null)?.status;
-  const atCapacity =
-    name === "AbortError" ||
-    name === "TimeoutError" ||
-    status === 429 ||
-    // The local limiter's own refusals, e.g. "exceeds the per-minute budget".
-    /rate limit|per-minute budget/i.test(message);
-
-  await logFailure(atCapacity ? "capacity" : "invalid_schema", message);
-  const fallback = atCapacity
-    ? "The assistant is at capacity right now. Please try again in a minute."
-    : "Sorry, something went wrong generating a response. Please try again.";
-  await prisma.message.create({ data: { conversationId, role: "assistant", content: fallback } });
+  const failure = generationError(err);
+  await logFailure(failure.category, `Generation failed (${failure.category})`);
+  try {
+    await prisma.message.create({ data: { conversationId, role: "assistant", content: failure.answer } });
+  } catch {
+    // A failing database must not hide the original retryable response.
+  }
   return withOwnerCookie(
     NextResponse.json(
-      { conversationId, answer: fallback, claims: [] },
-      { status: atCapacity ? 503 : 422, headers: atCapacity ? { "Retry-After": "60" } : undefined }
+      { conversationId, answer: failure.answer, claims: [], retryAfterSeconds: failure.retryAfterSeconds },
+      { status: failure.status, headers: failure.status === 503 ? { "Retry-After": String(failure.retryAfterSeconds) } : undefined }
     ),
     owner
   );
@@ -160,6 +165,18 @@ function notInCorpusMessage(docs: { name: string; publisher: string; year: numbe
 }
 
 export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req);
+  } catch {
+    await logFailure("request_unavailable", "Chat persistence or request processing unavailable");
+    return NextResponse.json(
+      { answer: "The assistant is temporarily unavailable. Please try again shortly.", claims: [] },
+      { status: 503, headers: { "Retry-After": "60" } }
+    );
+  }
+}
+
+async function handlePost(req: NextRequest) {
   const raw = await req.text();
   if (BACKEND_API_URL) return proxyToBackend(req, raw);
 
@@ -240,17 +257,18 @@ export async function POST(req: NextRequest) {
   await prisma.message.create({ data: { conversationId, role: "user", content: message } });
 
   if (!preCheck.allowed) {
+    const refusal = preCheck.category === "off_topic" ? OFF_TOPIC_MESSAGE : REFUSAL_MESSAGE;
     await logFailure(
       "missed_refusal_guard_triggered",
       `Pre-call guard blocked category=${preCheck.category} match="${preCheck.matchedText ?? ""}"`
     );
     await prisma.message.create({
-      data: { conversationId, role: "assistant", content: REFUSAL_MESSAGE },
+      data: { conversationId, role: "assistant", content: refusal },
     });
     return withOwnerCookie(
       NextResponse.json({
         conversationId,
-        answer: REFUSAL_MESSAGE,
+        answer: refusal,
         claims: [],
         answerMode: "refused" satisfies AnswerMode,
       }),
@@ -484,7 +502,7 @@ export async function POST(req: NextRequest) {
     await logFailure("grounded_uncovered", `passages matched but did not answer — query="${message.slice(0, 120)}"`);
     return respondGeneral({
       mode: "all",
-      sufficient: true,
+      sufficient: false,
       reason: "retrieved passages did not answer the question",
       k: retrieval.k,
       documentsSearched: retrieval.documentsSearched,
@@ -494,7 +512,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 7. Post-call scope guard — independent of whether the pre-call check passed.
-  const postCheck = checkResponse(answer);
+  const postCheck = checkResponse([answer, ...claims.map((c) => c.text)].join("\n"));
   if (!postCheck.allowed) {
     await logFailure("missed_refusal", `Post-call guard caught category=${postCheck.category}`);
     answer = REFUSAL_MESSAGE;
@@ -581,6 +599,7 @@ export async function GET(req: NextRequest) {
     endpoint: "/api/chat",
     usage: "POST { message: string, conversationId?: string, documentKey?: string }",
     retrievalConfig: RETRIEVAL_CONFIG_HASH,
+    promptVersion: PROMPT_VERSION,
     groqConfigured: Boolean(process.env.GROQ_API_KEY),
   };
 

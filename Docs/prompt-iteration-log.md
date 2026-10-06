@@ -1,5 +1,23 @@
 # Prompt Iteration Log
 
+## 2026-10-07 — grounded coverage versus topic scope
+
+Both live tiers now share stricter task-and-topic instructions: mixed requests,
+food-framed programming/writing and injected role labels do not create scope
+exceptions. Ordinary food quantities and cuisines remain allowed.
+
+The initial real-model preflight still refused `how many eggs to eat per day?`
+as off-topic. A direct general-tier call answered it correctly, locating the
+problem in the grounded tier. A final grounded-only decision rule now states
+that missing evidence for a permitted food quantity is an empty-claim coverage
+gap, never an off-topic refusal. The existing general-tier fallback then runs.
+
+Final real-model preflight: 3/3 passed, including a substantive eggs answer in
+7.5 seconds (`answerMode: general`, no citations). Offline scope checks: 78/78;
+independent route checks: 33/33. This is a guardrail/behavior measurement, not a
+new three-attempt numeric-drift evaluation. See [guardrail-audit.md](guardrail-audit.md)
+for release verification and remaining provider-capacity limitations.
+
 > **Status as of 2026-10-06:** this logs the Milestone 1 prompt iteration (prompt versions `7939902e9b` → `eabb1ca8b1`). Later prompt changes were not run through this harness: `SYSTEM_PROMPT_RAG` (Milestone 2), the 2026-10-04 scope and population-framing fixes, and `SYSTEM_PROMPT_GENERAL` (2026-10-06). Their measurements are in [retrieval-report.md](retrieval-report.md) and the commit history.
 
 Documents each `systemPrompt.ts` change and its measured before/after effect on `npm run eval`, per implementation-plan.md Phase 9. Raw logs: [failure-log-before-iteration.md](failure-log-before-iteration.md) (baseline) and [failure-log.md](failure-log.md) (current).

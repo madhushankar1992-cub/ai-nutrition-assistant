@@ -13,15 +13,17 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../lib/db";
-import { SYSTEM_PROMPT_RAG } from "../lib/systemPrompt";
+import { SYSTEM_PROMPT_GENERAL, SYSTEM_PROMPT_RAG } from "../lib/systemPrompt";
+import type { AnswerMode } from "../lib/schema";
 import { REFUSAL_MESSAGE } from "../lib/scopeGuard";
 import questions from "../data/eval-questions.json";
 
 const BASE_URL = process.env.EVAL_BASE_URL ?? "http://localhost:3000";
-// Hash the prompt the live route actually uses. Hashing the retired Milestone 1
-// SYSTEM_PROMPT meant edits to the live prompt never changed promptVersion,
-// which defeated grouping eval results by prompt over time.
-const PROMPT_VERSION = createHash("sha256").update(SYSTEM_PROMPT_RAG).digest("hex").slice(0, 10);
+// Both live tiers affect this run. A general-prompt edit must create a new
+// version just as a grounded-prompt edit does; delimit them to avoid ambiguity.
+const PROMPT_VERSION = createHash("sha256")
+  .update(SYSTEM_PROMPT_RAG).update("\u0000").update(SYSTEM_PROMPT_GENERAL)
+  .digest("hex").slice(0, 10);
 const ATTEMPTS_PER_QUESTION = 3;
 
 interface Citation {
@@ -38,6 +40,7 @@ interface ChatApiResponse {
   conversationId: string;
   answer: string;
   claims: { text: string; source: Citation | null }[];
+  answerMode?: AnswerMode;
   /** HTTP status of the call, so an error is recorded rather than ending the run. */
   httpStatus: number;
 }
@@ -90,6 +93,7 @@ async function callChat(
     conversationId: body.conversationId ?? conversationId ?? "",
     answer: body.answer ?? "",
     claims: body.claims ?? [],
+    answerMode: body.answerMode,
     httpStatus: res.status,
   };
 }
@@ -136,6 +140,27 @@ async function runDataset(): Promise<FailureRecord[]> {
       }
       attempts.push(response);
 
+      if (!["grounded", "general", "refused"].includes(response.answerMode ?? "")) {
+        failures.push({
+          category: "invalid_answer_mode", questionId: q.id,
+          detail: `Attempt ${attempt}: missing or invalid answerMode`,
+        });
+      }
+      if ((response.answerMode === "general" || response.answerMode === "refused") && response.claims.length > 0) {
+        failures.push({
+          category: "unexpected_claims", questionId: q.id,
+          detail: `Attempt ${attempt}: ${response.answerMode} answer must carry no claims`,
+        });
+      }
+      // The fixed dataset asks benign food questions. A refusal on a question
+      // with a substantive answer is a coverage defect, not unhelpful hedging.
+      if (response.answerMode === "refused" && q.category !== "no_clear_answer") {
+        failures.push({
+          category: "unexpected_refusal", questionId: q.id,
+          detail: `Attempt ${attempt}: refused an in-scope substantive question`,
+        });
+      }
+
       await prisma.evalRun.create({
         data: {
           promptVersion: PROMPT_VERSION,
@@ -172,26 +197,41 @@ async function runDataset(): Promise<FailureRecord[]> {
       }
     }
 
-    // Numeric drift: compare the set of numbers mentioned in claims across attempts.
-    const numberSets = attempts.map((a) => new Set(a.claims.flatMap((c) => extractNumbers(c.text))));
+    // Refusals have nothing to compare and must never look like repaired drift.
+    // Grounded numbers are measured in cited claims; general answers have no
+    // claims by design, so their factual consistency is measured in the answer.
+    const modes = new Set(attempts.map((a) => a.answerMode));
+    if (modes.size > 1) {
+      failures.push({
+        category: "answer_mode_drift", questionId: q.id,
+        detail: `Answer modes differed across attempts: ${attempts.map((a) => a.answerMode ?? "missing").join(" | ")}`,
+      });
+    }
+    const comparable = attempts.filter((a) =>
+      a.answerMode === "general" || (a.answerMode === "grounded" && a.claims.length > 0)
+    );
+    const numberSets = comparable.map((a) => new Set(
+      a.answerMode === "general" ? extractNumbers(a.answer) : a.claims.flatMap((c) => extractNumbers(c.text))
+    ));
     const allSame = numberSets.every((set, i) => {
       if (i === 0) return true;
       const prev = numberSets[i - 1];
       return set.size === prev.size && [...set].every((n) => prev.has(n));
     });
-    if (!allSame) {
+    if (modes.size === 1 && !allSame) {
       failures.push({
         category: "numeric_drift",
         questionId: q.id,
-        detail: `Numeric claims differed across ${ATTEMPTS_PER_QUESTION} attempts: ${numberSets
+        detail: `Numeric content differed across ${comparable.length} comparable attempts: ${numberSets
           .map((s) => [...s].join(","))
           .join(" | ")}`,
       });
     }
 
-    // Unhelpful hedging heuristic: very short answer with no concrete claims.
+    // General and refused answers intentionally carry no claims. Only a
+    // substantive grounded answer promises citations and fails this heuristic.
     for (const [i, a] of attempts.entries()) {
-      if (a.claims.length === 0 && q.category !== "no_clear_answer") {
+      if (a.answerMode === "grounded" && a.claims.length === 0 && q.category !== "no_clear_answer") {
         failures.push({
           category: "unhelpful_hedging",
           questionId: q.id,

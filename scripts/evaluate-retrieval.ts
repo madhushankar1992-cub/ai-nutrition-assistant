@@ -660,10 +660,24 @@ async function main() {
   console.log(`\nReport written to ${out}  (${((Date.now() - started) / 1000).toFixed(0)}s)`);
 
   await prisma.$disconnect();
-  // The adversarial suite and the cross-document assertion are both hard gates:
-  // a scope refusal reported as a coverage gap, or a comparison question that
-  // can only see one publisher, are defects rather than metrics.
-  process.exit(advPass === adv.length && multiDocOk ? 0 : 1);
+  // Fail the release check when the fixed answerable bank loses coverage or
+  // generation produces an unbindable citation, not merely when adversarial
+  // tests fail. Historical corpus/policy refusals remain explicitly unmeasured;
+  // they do not count as fixed drift or failed retrieval-bank questions.
+  const regressionBindingFailures = m1.reduce(
+    (sum, result) => sum + result.droppedCounts.reduce((total, count) => total + count, 0), 0
+  );
+  const gates = {
+    recall: rows.length > 0 && chunkHits === rows.length && docHits === rows.length,
+    falseRefusals: falseRefusals === 0,
+    adversarial: adv.length > 0 && advPass === adv.length,
+    crossDocument: multiDocOk,
+    citationBinding: citationBindingFailures === 0 && regressionBindingFailures === 0,
+    citationSample: spotAnswers > 0 && claimsBound > 0,
+  };
+  const failedGates = Object.entries(gates).filter(([, passed]) => !passed).map(([name]) => name);
+  console.log(failedGates.length ? `FAILED release gates: ${failedGates.join(", ")}` : "All retrieval release gates passed.");
+  process.exit(failedGates.length === 0 ? 0 : 1);
 }
 
 main().catch(async (err) => {
