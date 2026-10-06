@@ -8,6 +8,7 @@ import { formatPassages, retrieve } from "@/lib/retrieval";
 import { bindCitations } from "@/lib/citations";
 import { RETRIEVAL_CONFIG_HASH } from "@/lib/retrievalConfig";
 import { storeStats } from "@/lib/corpus/vectorStore";
+import { warmUp } from "@/lib/corpus/embeddings";
 import { resolveOwner, type OwnerResult } from "@/lib/session";
 import { getSource } from "@/lib/corpus/sources";
 
@@ -25,6 +26,20 @@ export const maxDuration = 60;
 // happen inside the handler. Doing it server-side also keeps the browser
 // talking to one origin, so there is no CORS to configure.
 const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace(/\/$/, "");
+
+// Start loading the embedding model as soon as this route module loads, not
+// on the first question. Measured: the first question after a deploy took
+// 26 s, almost all of it the container downloading and initialising the
+// ONNX weights; the same question warm takes ~3 s. The health check
+// (GET /api/chat) loads this module, so pinging it after a deploy warms the
+// model before any user arrives. Skipped where the route only proxies.
+// Not during `next build`, which also loads this module to collect page data.
+if (!BACKEND_API_URL && process.env.NEXT_PHASE !== "phase-production-build") {
+  warmUp().catch(() => {
+    // A failed warm-up is retried on first use; embeddings.ts never caches a
+    // rejected load.
+  });
+}
 
 async function proxyToBackend(req: NextRequest, body?: string): Promise<NextResponse> {
   const target = `${BACKEND_API_URL}/api/chat${req.nextUrl.search}`;
@@ -267,34 +282,11 @@ export async function POST(req: NextRequest) {
   //   - otherwise: the general-knowledge tier (added 2026-10-06) answers from
   //     model knowledge, with NO claims and answerMode "general", so the client
   //     labels it as not coming from the cited documents.
-  if (!retrieval.sufficient) {
-    await logFailure("not_in_corpus", `${retrieval.reason} — query="${message.slice(0, 120)}"`);
-    const retrievalBlock = {
-      mode: documentKey ? "filtered" : "all",
-      sufficient: false,
-      reason: retrieval.reason,
-      k: retrieval.k,
-      documentsSearched: retrieval.documentsSearched,
-      chunks: [],
-      configVersion: RETRIEVAL_CONFIG_HASH,
-    };
-
-    if (documentKey) {
-      const answer = notInCorpusMessage(retrieval.documentsSearched);
-      await prisma.message.create({ data: { conversationId, role: "assistant", content: answer } });
-      return withOwnerCookie(
-        NextResponse.json({
-          conversationId,
-          answer,
-          claims: [],
-          answerMode: "refused" satisfies AnswerMode,
-          retrieval: retrievalBlock,
-        }),
-        owner
-      );
-    }
-
-    // 4b. General tier. One extra Groq call, only on this path; the rate
+  // The general-knowledge tier, shared by two paths: retrieval found nothing
+  // close enough (below), and retrieval found passages that turned out not to
+  // answer the question (the grounded tier returned no cited claim).
+  const respondGeneral = async (retrievalBlock: Record<string, unknown>) => {
+  // 4b. General tier. One extra Groq call; the rate
     // limiter and the generation deadline apply to it like any other call.
     let general;
     try {
@@ -347,6 +339,36 @@ export async function POST(req: NextRequest) {
       }),
       owner
     );
+  };
+
+  if (!retrieval.sufficient) {
+    await logFailure("not_in_corpus", `${retrieval.reason} — query="${message.slice(0, 120)}"`);
+    const retrievalBlock = {
+      mode: documentKey ? "filtered" : "all",
+      sufficient: false,
+      reason: retrieval.reason,
+      k: retrieval.k,
+      documentsSearched: retrieval.documentsSearched,
+      chunks: [],
+      configVersion: RETRIEVAL_CONFIG_HASH,
+    };
+
+    if (documentKey) {
+      const answer = notInCorpusMessage(retrieval.documentsSearched);
+      await prisma.message.create({ data: { conversationId, role: "assistant", content: answer } });
+      return withOwnerCookie(
+        NextResponse.json({
+          conversationId,
+          answer,
+          claims: [],
+          answerMode: "refused" satisfies AnswerMode,
+          retrieval: retrievalBlock,
+        }),
+        owner
+      );
+    }
+
+    return respondGeneral(retrievalBlock);
   }
 
   // 5. Generate from the retrieved passages only (grounded tier).
@@ -398,6 +420,26 @@ export async function POST(req: NextRequest) {
     answerMode = "refused";
     // Nothing was answered, so no passages are shipped alongside the refusal.
     suppressed = true;
+  }
+
+  // The passages matched the topic but did not answer the question: the model
+  // said so and cited nothing. Measured: "how many eggs to eat per day?"
+  // retrieved egg passages (score 0.67, past the gate), and the user got "the
+  // supplied guidance does not specify" while every unmatched food question
+  // got a real answer. With no cited claim there is nothing grounded to lose,
+  // so hand over to the general tier - except for a single-document request,
+  // where "this document does not cover it" is the correct answer.
+  if (answerMode === "grounded" && claims.length === 0 && !documentKey) {
+    await logFailure("grounded_uncovered", `passages matched but did not answer — query="${message.slice(0, 120)}"`);
+    return respondGeneral({
+      mode: "all",
+      sufficient: true,
+      reason: "retrieved passages did not answer the question",
+      k: retrieval.k,
+      documentsSearched: retrieval.documentsSearched,
+      chunks: [],
+      configVersion: RETRIEVAL_CONFIG_HASH,
+    });
   }
 
   // 7. Post-call scope guard — independent of whether the pre-call check passed.

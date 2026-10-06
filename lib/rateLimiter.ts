@@ -16,7 +16,11 @@ const TPD_LIMIT = 200000;
 
 // Stay under the provider's stated limits, not right at the edge of them.
 const RPM_SAFE = 25;
-const TPM_SAFE = 7000;
+// 7,600 of Groq's 8,000. The margin used to be 1,000 because every request was
+// budgeted at its worst case (the full max_tokens output). Reservations are now
+// settled to the tokens Groq actually reports, so the margin only has to cover
+// the estimate for requests still in flight.
+const TPM_SAFE = 7600;
 
 interface RequestRecord {
   timestamp: number;
@@ -54,7 +58,12 @@ export class RateLimiter {
    * exhausted — a day-long wait isn't practical to do silently.
    * Oversized requests reject immediately; a signal cancels queued waits.
    */
-  async reserve(estimatedTokens: number, signal?: AbortSignal): Promise<void> {
+  async reserve(
+    estimatedTokens: number,
+    signal?: AbortSignal,
+    maxWaitMs = Number.POSITIVE_INFINITY
+  ): Promise<{ settle(actualTokens: number): void }> {
+    const startedAt = Date.now();
     signal?.throwIfAborted();
     if (!Number.isFinite(estimatedTokens) || estimatedTokens < 0) {
       throw new Error("Estimated token count must be finite and nonnegative.");
@@ -82,12 +91,36 @@ export class RateLimiter {
 
       const oldest = this.minuteWindow[0];
       const waitMs = oldest ? Math.max(oldest.timestamp + 60_000 - Date.now(), 250) : 1000;
+
+      // Fail fast rather than queue past the caller's patience. Measured:
+      // a second question 8 s after the first waited silently for the
+      // per-minute budget, hit the 45 s generation deadline, and the user got
+      // "at capacity" after nearly a minute of nothing. Saying so immediately,
+      // with how long to wait, is the honest version of the same outcome.
+      if (Date.now() - startedAt + waitMs > maxWaitMs) {
+        const retryInS = Math.ceil(waitMs / 1000);
+        throw new Error(
+          `Groq per-minute budget is full; retry in about ${retryInS} s.`
+        );
+      }
       await delay(waitMs, undefined, { signal });
     }
 
-    this.minuteWindow.push({ timestamp: Date.now(), tokens: estimatedTokens });
+    const record = { timestamp: Date.now(), tokens: estimatedTokens };
+    this.minuteWindow.push(record);
     this.dayRequests += 1;
     this.dayTokens += estimatedTokens;
+
+    // The estimate counts the full max_tokens output allowance, which real
+    // answers rarely use. Once Groq reports actual usage, correct the record,
+    // so the next request is not held back by tokens that were never spent.
+    return {
+      settle: (actualTokens: number) => {
+        if (!Number.isFinite(actualTokens) || actualTokens <= 0) return;
+        this.dayTokens = Math.max(0, this.dayTokens + actualTokens - record.tokens);
+        record.tokens = actualTokens;
+      },
+    };
   }
 }
 
@@ -104,4 +137,4 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-export { RPM_LIMIT, TPM_LIMIT, RPD_LIMIT, TPD_LIMIT };
+export { RPM_LIMIT, TPM_LIMIT, RPD_LIMIT, TPD_LIMIT, TPM_SAFE };

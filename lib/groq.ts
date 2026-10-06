@@ -32,6 +32,9 @@ const MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
  * retries. Overridable so a slow model can be measured rather than guessed at.
  */
 const GENERATION_DEADLINE_MS = Number(process.env.GENERATION_DEADLINE_MS) || 45_000;
+
+/** Longest a request may queue for per-minute Groq budget before failing fast. */
+const MAX_BUDGET_WAIT_MS = Number(process.env.MAX_BUDGET_WAIT_MS) || 15_000;
 const MAX_TOKENS = 700;
 const TEMPERATURE = 0.2; // low but nonzero: reduces run-to-run drift without hiding it entirely from evaluation
 
@@ -90,7 +93,9 @@ async function callOnce(
   let attempt = 0;
   for (;;) {
     signal.throwIfAborted();
-    await groqRateLimiter.reserve(estimatedTokens, signal);
+    // Wait at most this long for per-minute budget; past it, fail fast with a
+    // capacity error instead of sitting silent until the generation deadline.
+    const reservation = await groqRateLimiter.reserve(estimatedTokens, signal, MAX_BUDGET_WAIT_MS);
 
     try {
       const response = await getClient().chat.completions.create({
@@ -115,6 +120,8 @@ async function callOnce(
           },
         },
       }, { signal });
+
+      reservation.settle(response.usage?.total_tokens ?? 0);
 
       const content = response.choices[0]?.message?.content;
       if (!content) {
